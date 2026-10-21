@@ -115,6 +115,7 @@ cli() { # cli <args...> — run usfcpu.sh with an isolated config dir
   USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 sh "$MOD/usfcpu.sh" "$@" 2>&1
 }
 
+t_update_json_paths
 t_cli_usage() {
   out=$(cli bogus-subcommand); rc=$?
   [ "$rc" -eq 2 ] || { bad cli-usage "exit $rc, expected 2"; return; }
@@ -241,6 +242,37 @@ t_cli_profile_bad() {
   ok cli-profile-bad
 }
 
+t_update_json_paths() {
+  uj="$ROOT/update.json"
+  [ -f "$uj" ] || { bad update-json "update.json missing"; return; }
+  # version/versionCode must agree with module.prop (an updater compares codes)
+  uver=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$uj")
+  ucode=$(sed -n 's/.*"versionCode": \([0-9]*\).*/\1/p' "$uj")
+  pver=$(sed -n 's/^version=//p' "$MOD/module.prop")
+  pcode=$(sed -n 's/^versionCode=//p' "$MOD/module.prop")
+  [ "$uver" = "$pver" ] || { bad update-json "version $uver != module.prop $pver"; return; }
+  [ "$ucode" = "$pcode" ] || { bad update-json "versionCode $ucode != module.prop $pcode"; return; }
+
+  # every raw.githubusercontent URL must point at a real file in the repo:
+  # a 404 here is what made the manager fail to fetch the changelog
+  for url in $(sed -n 's/.*"\(changelog\|zipUrl\)": "\(https:[^"]*\)".*/\1 \2/p' "$uj" | grep raw.githubusercontent || true); do :; done
+  cl=$(sed -n 's/.*"changelog": "\([^"]*\)".*/\1/p' "$uj")
+  case "$cl" in
+    *raw.githubusercontent.com/*/main/*)
+      rel=${cl#*raw.githubusercontent.com/}
+      rel=${rel#*/main/}
+      [ -f "$ROOT/$rel" ] || { bad update-json "changelog 404s: no $rel in repo"; return; }
+      ;;
+  esac
+  # zipUrl must name the same version as the release
+  zip=$(sed -n 's/.*"zipUrl": "\([^"]*\)".*/\1/p' "$uj")
+  case "$zip" in
+    *"/$uver/"*"-$uver.zip") : ;;
+    *) bad update-json "zipUrl does not match $uver: $zip"; return ;;
+  esac
+  ok update-json-paths
+}
+
 t_pretty
 t_minified
 t_partial
@@ -251,6 +283,7 @@ t_verifier_catches_leftover
 t_decoy_names
 t_gt_in_value
 t_apostrophe_value
+t_update_json_paths
 t_cli_usage
 t_cli_games
 t_cli_watch_toggle
