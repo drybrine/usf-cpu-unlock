@@ -35,26 +35,24 @@ tersedia untuk perbandingan/pemulihan manual.
 
 ## Alur penggunaan
 
-### Alur soft reboot (GhostLock — direkomendasikan)
+Patch **terpasang otomatis di semua alur — tidak ada tombol Apply:**
 
-1. Jalankan GhostLock (root aktif).
-2. Install ZIP lewat manager → **customize.sh otomatis mem-mount config
-   yang sudah dipatch saat install** (mode mount-only, tanpa kill USF).
-3. **Soft reboot.** Kernel tetap hidup → root & bind mount tetap ada;
-   framework me-restart `com.transsion.usf` → dia membaca config patched
-   saat startup. Cap lepas, tanpa perintah manual, tanpa `kill -9`.
+1. **Install ZIP** → `customize.sh` langsung mem-mount config yang dipatch.
+2. **Soft reboot** → kernel tetap hidup: root & bind mount tetap ada; USF
+   restart sendiri dan membaca config patched.
+3. **Full reboot (root permanen)** → `post-fs-data.sh` + `service.sh`
+   otomatis apply saat boot.
+4. **Full reboot (GhostLock)** → jalankan GhostLock lagi; `service.sh`
+   auto-apply begitu ksud memuat modul.
 
-Full reboot beda cerita: mount hilang (state kernel mati), root hilang →
-perulangan GhostLock, dan `service.sh` auto-apply di sesi berikutnya.
+Tombol **Restore** (WebUI/CLI) adalah satu-satunya jalan balik ke stok.
+Matikan auto-apply dengan file `disable-auto` di direktori module.
 
 ### Perintah manual (opsional)
 
 ```sh
 # lihat status
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh status'
-
-# aktifkan tanpa soft reboot (mount + restart USF via kill -9)
-su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh apply'
 
 # kembalikan ke stok
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh restore'
@@ -65,11 +63,12 @@ Tombol **Action** di manager = toggle apply/restore.
 ### WebUI
 
 Module ini punya WebUI — buka dari halaman module di manager (KernelSU /
-APatch / MMRL). Tombol **Apply / Restore / Restart USF** sekali tap, kartu
-status live (status patch, ceiling tiap cluster vs max hardware, level
-engine, pid USF), dan log command yang bisa di-copy (tersembunyi di balik
-tombol toggle). Kartu tergambar instan dari quick status khusus-sysfs;
-detail engine (dumpsys) menyusul di belakang tanpa memblokir. Satu file
+APatch / MMRL). Aksi **Restore / Restart USF** sekali tap, kartu status live
+(status patch, ceiling tiap cluster vs max hardware, level engine, pid USF),
+dan log command yang bisa di-copy (tersembunyi di balik tombol toggle).
+Tidak ada tombol Apply — patch terpasang otomatis saat install dan setiap
+module dimuat. Kartu tergambar instan dari quick status khusus-sysfs; detail
+engine (dumpsys) menyusul di belakang tanpa memblokir. Satu file
 `webroot/index.html` mandiri — tanpa bundler, tanpa akses jaringan.
 
 Riwayat versi tersimpan di dalam module:

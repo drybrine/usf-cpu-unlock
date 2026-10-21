@@ -132,7 +132,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("quick: little unlocked", els.p0.textContent.indexOf("2.00") !== -1 && els.p0.textContent.indexOf("\u2713") !== -1);
   check("quick: big unlocked", els.p4.textContent.indexOf("2.60") !== -1 && els.p4.textContent.indexOf("\u2713") !== -1);
   check("quick: engine pending (\u2013)", els.engine.textContent === "\u2013");
-  check("quick: buttons re-enabled while full loads", els.btnApply.disabled === false);
+  check("quick: buttons re-enabled while full loads", els.btnRestore.disabled === false && els.btnRefresh.disabled === false);
+  check("no Apply button in the page", html.indexOf("btnApply") === -1 && html.indexOf(">Apply<") === -1);
   check("log hidden by default", els.log.style.display === "none");
 
   await sleep(80); // full status (40ms) has landed

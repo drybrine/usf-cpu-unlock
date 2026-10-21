@@ -90,7 +90,6 @@
            background: var(--surface-container-high); position: relative; overflow: hidden; }
   button:active { transform: scale(.98); }
   button:disabled { opacity: .38; pointer-events: none; }
-  button.filled { background: var(--primary, #ffb0cc); color: var(--on-primary, #541d35); }
   button.tonalErr { background: var(--error-container, #8c1d18); color: var(--on-error-container, #f9dedc); }
   button.wide { grid-column: 1 / -1; }
   .ripple { position: absolute; border-radius: 50%; transform: scale(0); opacity: .6;
@@ -110,8 +109,6 @@
           border: 2px solid rgba(255,255,255,.25); border-top-color: currentColor; vertical-align: -2px; margin-right: 7px;
           animation: rot .8s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
-
-  .foot { color: var(--on-surface-variant); font-size: 11.5px; text-align: center; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -158,19 +155,14 @@
   </div>
 
   <div class="btns">
-    <button class="filled" id="btnApply">Apply</button>
     <button class="tonalErr" id="btnRestore">Restore</button>
     <button id="btnRestart">Restart USF</button>
     <button id="btnRefresh">Refresh</button>
-    <button class="wide" id="btnLog">Show log &#9662;</button>
+    <button id="btnLog">Show log &#9662;</button>
     <button class="wide" id="btnCopy">Copy output</button>
   </div>
 
   <div class="log" id="log"></div>
-  <p class="foot">
-    apply = mount patched config + reload USF &middot; restore = stock behavior<br>
-    Junction / skin-TJ / charging / GPU policy are never touched
-  </p>
 </div>
 
 <script>
@@ -247,7 +239,7 @@ function ghz(khz) {
 
 function setBusy(b, label) {
   busy = b;
-  ["btnApply", "btnRestore", "btnRestart", "btnRefresh"].forEach(function (id) {
+  ["btnRestore", "btnRestart", "btnRefresh"].forEach(function (id) {
     $(id).disabled = b;
   });
   if (b) {
@@ -376,16 +368,13 @@ function action(sub, label, doneMsg) {
 // ---- Wiring ----------------------------------------------------------------
 if (!window.ksu || typeof ksu.exec !== "function") {
   $("noKsu").style.display = "block";
-  ["btnApply", "btnRestore", "btnRestart"].forEach(function (id) { $(id).disabled = true; });
+  ["btnRestore", "btnRestart"].forEach(function (id) { $(id).disabled = true; });
 }
 
-["btnApply", "btnRestore", "btnRestart", "btnRefresh", "btnLog", "btnCopy"]
+["btnRestore", "btnRestart", "btnRefresh", "btnLog", "btnCopy"]
   .forEach(function (id) { ripple($(id)); });
 
 $("btnRefresh").onclick = function () { refresh(); };
-$("btnApply").onclick = function () {
-  action("apply", "Applying\u2026", "Patch applied");
-};
 $("btnRestore").onclick = function () {
   action("restore", "Restoring\u2026", "Stock behavior restored");
 };

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.0 (versionCode 11)
+
+- **Fully automatic apply — the Apply button is gone.** The patch now mounts
+  itself in every flow with no user action: install (customize.sh), module
+  load (service.sh), and boot (post-fs-data.sh + service.sh). The WebUI's
+  remaining actions are Restore / Restart USF / Refresh / log / copy;
+  **Restore** is the single escape hatch back to stock. The `apply` CLI
+  subcommand stays for the Action toggle and edge cases.
+- WebUI: footer text removed for a cleaner card.
+
 ## v1.4.0 (versionCode 10)
 
 - **Material-3 WebUI redesign** (Encore Tweaks-inspired): status hero card on

@@ -30,29 +30,36 @@ Everything else in the config — skin-control TJ targets, brightness/HBM, charg
 
 Flash `usf-cpu-unlock-*.zip` from [Releases](../../releases) in your KernelSU manager. The installer checks for the Transsion config and mounts the patched file immediately.
 
-**Temporary root (GhostLock):** install → **soft reboot**. The kernel (and with it root + the bind mount) stays alive; USF restarts with the framework and loads the patched config on its own.
+**The patch applies itself in every flow — there is no Apply button:**
 
-**Permanent root (KernelSU at boot):** nothing else to do — `post-fs-data.sh` mounts the patch before USF ever starts.
+| Flow | What happens |
+|---|---|
+| Install (any root) | `customize.sh` mounts the patched config immediately |
+| Soft reboot after install | Kernel stays alive: root + mount persist, USF reloads the patched config |
+| Full reboot, permanent root | `post-fs-data.sh` + `service.sh` re-apply at boot, before/around USF start |
+| Full reboot, temporary root (GhostLock) | Re-run GhostLock; `service.sh` auto-applies when ksud loads the module |
+
+The **Restore** action in the WebUI/CLI is the single escape hatch back to stock. Auto-apply can be disabled with a `disable-auto` file in the module directory.
 
 ## Usage
 
 ```sh
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh status'   # state + live ceilings
-su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh apply'    # mount + reload USF
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh restore'  # back to stock
 ```
 
-The **Action** button in the manager toggles apply/restore. Auto-apply on module load can be disabled with a `disable-auto` file in the module directory. `uninstall.sh` restores stock behavior before removal.
+The manager **Action** button toggles apply/restore. `uninstall.sh` restores stock behavior before removal.
 
 ### WebUI
 
 The module ships a WebUI — open it from the module's page in the manager
-(KernelSU / APatch / MMRL). One-tap **Apply / Restore / Restart USF**, a live
-status card (patch state, per-cluster ceilings vs hardware max, engine level,
-USF pid) and a copyable command log behind a toggle. The card paints
-instantly from a sysfs-only quick status; engine details (dumpsys) fill in
-afterwards without blocking. Single self-contained `webroot/index.html` — no
-bundler, no network access.
+(KernelSU / APatch / MMRL). **Restore** / **Restart USF** one-tap actions, a
+live status card (patch state, per-cluster ceilings vs hardware max, engine
+level, USF pid) and a copyable command log behind a toggle. There is no Apply
+action — the patch applies itself on install and on every module load; the
+card paints instantly from a sysfs-only quick status while engine details
+(dumpsys) fill in afterwards without blocking. Single self-contained
+`webroot/index.html` — no bundler, no network access.
 
 A working apply looks like this:
 
