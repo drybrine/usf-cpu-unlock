@@ -167,7 +167,71 @@ t_cli_profile_status() {
   echo "$out" | grep -q 'watcher     : on' || { bad cli-pstatus "watcher line missing: $out"; return; }
   echo "$out" | grep -q 'profile     : performance' || { bad cli-pstatus "profile line missing"; return; }
   echo "$out" | grep -q 'gamelist    : 2 package' || { bad cli-pstatus "gamelist count wrong"; return; }
+  echo "$out" | grep -q 'governor    :' || { bad cli-pstatus "governor line missing"; return; }
   ok cli-profile-status
+}
+
+t_cli_profile_writes_hold() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  out=$(cli profile performance)
+  echo "$out" | grep -q 'profile applied: performance' || { bad cli-hold "not confirmed: $out"; return; }
+  [ -f "$TMP/cfg/manual_hold" ] || { bad cli-hold "no manual hold written"; return; }
+  hold=$(head -n 1 "$TMP/cfg/manual_hold")
+  ts=${hold%%|*}
+  case "$ts" in ''|*[!0-9]*) bad cli-hold "hold timestamp not numeric: $hold"; return ;; esac
+  case "$hold" in *'|'*) : ;; *) bad cli-hold "hold has no package field: $hold"; return ;; esac
+  # state kept in sync so the watcher's next poll does not re-apply blindly
+  [ "$(cat "$TMP/cfg/watcher.state" 2>/dev/null)" = "performance" ] \
+    || { bad cli-hold "watcher.state not synced"; return; }
+  [ "$(cat "$TMP/cfg/manual_profile" 2>/dev/null)" = "performance" ] \
+    || { bad cli-hold "manual_profile not written"; return; }
+  echo "$out" | grep -q 'manual hold' || { bad cli-hold "hold not announced: $out"; return; }
+  ok cli-profile-hold
+}
+
+t_cli_watch_clears_hold() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  printf '1000000|com.android.chrome\n' > "$TMP/cfg/manual_hold"
+  out=$(cli watch on)
+  [ -f "$TMP/cfg/manual_hold" ] && { bad cli-hold-clear "watch on kept the hold"; return; }
+  printf '1000000|com.android.chrome\n' > "$TMP/cfg/manual_hold"
+  cli watch off >/dev/null
+  [ -f "$TMP/cfg/manual_hold" ] && { bad cli-hold-clear "watch off kept the hold"; return; }
+  ok cli-watch-clears-hold
+}
+
+t_cli_profile_status_shows_hold() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  printf '1000000|com.mobile.legends\n' > "$TMP/cfg/manual_hold"
+  printf 'performance\n' > "$TMP/cfg/watcher.state"
+  out=$(cli profile-status)
+  echo "$out" | grep -q 'manual hold : com.mobile.legends' \
+    || { bad cli-hold-status "hold not shown: $out"; return; }
+  ok cli-profile-status-hold
+}
+
+t_cli_screenoff() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  # default
+  out=$(cli profile-status)
+  echo "$out" | grep -q 'screenoff   : powersave' || { bad cli-soff "default wrong: $out"; return; }
+
+  out=$(cli screenoff keep)
+  echo "$out" | grep -q 'profile left untouched' || { bad cli-soff "keep not confirmed: $out"; return; }
+  [ "$(cat "$TMP/cfg/watcher.screen_off" 2>/dev/null)" = "keep" ] \
+    || { bad cli-soff "mode not persisted"; return; }
+  out=$(cli profile-status)
+  echo "$out" | grep -q 'screenoff   : keep' || { bad cli-soff "status not updated: $out"; return; }
+
+  cli screenoff balance >/dev/null
+  [ "$(cat "$TMP/cfg/watcher.screen_off")" = "balance" ] || { bad cli-soff "balance not persisted"; return; }
+
+  # invalid mode is rejected and leaves the file alone
+  out=$(cli screenoff turbo); rc=$?
+  [ "$rc" -eq 2 ] || { bad cli-soff "invalid mode exit $rc"; return; }
+  [ "$(cat "$TMP/cfg/watcher.screen_off")" = "balance" ] \
+    || { bad cli-soff "invalid mode overwrote the setting"; return; }
+  ok cli-screenoff
 }
 
 t_cli_profile_bad() {
@@ -192,6 +256,10 @@ t_cli_games
 t_cli_watch_toggle
 t_cli_profile_status
 t_cli_profile_bad
+t_cli_screenoff
+t_cli_profile_writes_hold
+t_cli_watch_clears_hold
+t_cli_profile_status_shows_hold
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

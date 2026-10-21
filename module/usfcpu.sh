@@ -18,6 +18,7 @@
 #
 # Commands: apply | restore | status | toggle | restart-usf
 #           profile <name> | profile-status | watch <on|off|status>
+#           screenoff <powersave|balance|keep>
 #           games <add|remove|list> [package]
 
 case "$0" in
@@ -43,6 +44,8 @@ LOG="$MODDIR/apply.log"
 
 CONFIG_DIR=${USF_CONFIG_DIR:-/data/adb/.config/usf-cpu-unlock}
 GAMELIST="$CONFIG_DIR/gamelist.txt"
+HOLDFILE="$CONFIG_DIR/manual_hold"
+SCREENOFF_FILE="$CONFIG_DIR/watcher.screen_off"
 WATCHER="$MODDIR/scripts/usf_watcher.sh"
 PROFILER="$MODDIR/scripts/usf_profiler.sh"
 
@@ -77,7 +80,13 @@ usf_pids() {
 is_mounted() { cut -d' ' -f2 /proc/mounts 2>/dev/null | grep -qxF "$1"; }
 
 engine_state() {
-  dumpsys activity service com.transsion.usf.UsfMainService -thermal thermal_engine state 2>/dev/null
+  # dumpsys can block on a wedged service; a timeout keeps `status` from
+  # hanging (or looking empty) instead of reporting what it already knows.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 6 dumpsys activity service com.transsion.usf.UsfMainService -thermal thermal_engine state 2>/dev/null
+  else
+    dumpsys activity service com.transsion.usf.UsfMainService -thermal thermal_engine state 2>/dev/null
+  fi
 }
 
 state_field() {
@@ -300,8 +309,13 @@ do_status() {
   pids=$(usf_pids | tr '\n' ' ')
   ui "usf pid(s) : ${pids:-not running}"
   ui "engine state (excerpt):"
-  engine_state | sed -n '/=== Thermal Engine State ===/,/=== End of Thermal Engine State ===/p' \
-    | grep -E 'MTK thermal CPU limit support|Thermal CPU handle|Current temp config|tempLevel=|^ *cpu=|clusterCpu[012]='
+  excerpt=$(engine_state | sed -n '/=== Thermal Engine State ===/,/=== End of Thermal Engine State ===/p' \
+    | grep -E 'MTK thermal CPU limit support|Thermal CPU handle|Current temp config|tempLevel=|^ *cpu=|clusterCpu[012]=')
+  if [ -n "$excerpt" ]; then
+    ui "$excerpt"
+  else
+    ui "  (engine dump unavailable - dumpsys did not respond; mount state above is still valid)"
+  fi
   ui "cpufreq caps (max vs hardware max):"
   print_freqs
 }
@@ -336,6 +350,22 @@ do_changelog() {
 
 # --- performance profiles (ported from Encore Tweaks) ----------------------
 
+# Foreground package, same cheap signal the watcher uses (top-app cpuset +
+# oom_score_adj). Used to scope a manual profile pick to the current app.
+current_fg() {
+  # Word splitting is intended: cgroup.procs is a whitespace list of PIDs.
+  # shellcheck disable=SC2013
+  for p in $(cat /dev/cpuset/top-app/cgroup.procs 2>/dev/null); do
+    adj=$(cat "/proc/$p/oom_score_adj" 2>/dev/null)
+    [ "$adj" = "0" ] || continue
+    c=$(tr -d '\0' < "/proc/$p/cmdline" 2>/dev/null)
+    case "$c" in ''|*:*|*/*) continue ;; esac
+    printf '%s\n' "$c"
+    return 0
+  done
+  return 1
+}
+
 do_profile() {
   p=${1:-}
   case "$p" in
@@ -349,7 +379,17 @@ do_profile() {
   sh "$PROFILER" "$p" >/dev/null 2>&1
   mkdir -p "$CONFIG_DIR" 2>/dev/null
   printf '%s\n' "$p" > "$CONFIG_DIR/manual_profile" 2>/dev/null
+  # Keep the watcher's idea of the current profile in sync, and pin a manual
+  # hold to this app so the next poll does not immediately undo the pick.
+  printf '%s\n' "$p" > "$CONFIG_DIR/watcher.state" 2>/dev/null
+  fg=$(current_fg 2>/dev/null) || fg=""
+  printf '%s|%s\n' "$(date +%s)" "$fg" > "$HOLDFILE" 2>/dev/null
   ui "profile applied: $p"
+  if [ -n "$fg" ]; then
+    ui "manual hold : active while $fg stays foreground"
+  else
+    ui "manual hold : active (foreground app not detected)"
+  fi
   print_freqs
 }
 
@@ -367,7 +407,16 @@ do_profile_status() {
   [ -n "$man" ] && ui "manual pick : $man"
   n=0
   [ -r "$GAMELIST" ] && n=$(grep -cvE '^[[:space:]]*(#|$)' "$GAMELIST" 2>/dev/null)
+  if [ -r "$HOLDFILE" ]; then
+    hold=$(head -n 1 "$HOLDFILE" 2>/dev/null)
+    ui "manual hold : ${hold#*|} (until the foreground app changes)"
+  fi
   ui "gamelist    : ${n:-0} package(s) -> $GAMELIST"
+  gov=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)
+  ui "screenoff   : $(screenoff_mode)"
+  ui "governor    : ${gov:-unknown} (policy0)"
+  ppm=$(cat /proc/ppm/policy/hard_userlimit_max_cpu_freq 2>/dev/null | tr '\n' ';' | sed 's/;$//')
+  [ -n "$ppm" ] && ui "ppm max lim : $ppm"
   ui "cpufreq caps (max vs hardware max):"
   print_freqs
 }
@@ -375,7 +424,7 @@ do_profile_status() {
 do_watch() {
   case "${1:-status}" in
     on|enable)
-      rm -f "$CONFIG_DIR/watcher.disabled" 2>/dev/null
+      rm -f "$CONFIG_DIR/watcher.disabled" "$HOLDFILE" 2>/dev/null
       mkdir -p "$CONFIG_DIR" 2>/dev/null
       if [ ! -f "$WATCHER" ]; then
         ui "ERROR: watcher script missing ($WATCHER)"; return 1
@@ -397,6 +446,7 @@ do_watch() {
     off|disable)
       mkdir -p "$CONFIG_DIR" 2>/dev/null
       : > "$CONFIG_DIR/watcher.disabled"
+      rm -f "$HOLDFILE" 2>/dev/null
       old=$(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null)
       if [ -n "$old" ] && [ -d "/proc/$old" ]; then
         case "$(tr -d '\0' < "/proc/$old/cmdline" 2>/dev/null)" in
@@ -411,6 +461,39 @@ do_watch() {
       ;;
     *)
       ui "usage: $0 watch {on|off|status}"; return 2 ;;
+  esac
+}
+
+do_screenoff() {
+  mode=${1:-}
+  case "$mode" in
+    powersave|balance|keep) ;;
+    '')
+      ui "screen-off profile: $(screenoff_mode 2>/dev/null || echo powersave)"
+      ui "usage: $0 screenoff {powersave|balance|keep}"
+      return 0
+      ;;
+    *)
+      ui "usage: $0 screenoff {powersave|balance|keep}"
+      return 2
+      ;;
+  esac
+  mkdir -p "$CONFIG_DIR" 2>/dev/null
+  printf '%s\n' "$mode" > "$SCREENOFF_FILE" 2>/dev/null
+  case "$mode" in
+    keep)      ui "screen off: profile left untouched (no powersave stutter on unlock)" ;;
+    balance)   ui "screen off: drop to balance" ;;
+    powersave) ui "screen off: drop to powersave" ;;
+  esac
+  ui "takes effect on the watcher's next poll (<= 2s)"
+}
+
+# Effective screen-off mode, same precedence the watcher uses.
+screenoff_mode() {
+  m=$(head -n 1 "$SCREENOFF_FILE" 2>/dev/null | tr -d '\r' | tr -d ' ')
+  case "$m" in
+    powersave|balance|keep) printf '%s\n' "$m" ;;
+    *) printf 'powersave\n' ;;
   esac
 }
 
@@ -468,6 +551,7 @@ case "$0" in
   profile)      do_profile "${2:-}" ;;
   profile-status) do_profile_status ;;
   watch)        do_watch "${2:-status}" ;;
+  screenoff)    do_screenoff "${2:-}" ;;
   games)        do_games "${2:-list}" "${3:-}" ;;
   toggle)
     if [ -n "$SRC" ] && is_mounted "$SRC"; then do_restore; else do_apply; fi
@@ -477,6 +561,7 @@ case "$0" in
     ui "usage: $0 {apply|restore|status|webui-quick|toggle|changelog|restart-usf}"
     ui "       $0 profile {performance|performance_lite|balance|powersave}"
     ui "       $0 profile-status | watch {on|off|status}"
+    ui "       $0 screenoff {powersave|balance|keep}"
     ui "       $0 games {add|remove|list} [package]"
     ui "action.sh/service.sh/uninstall.sh source this file as a library."
     exit 2

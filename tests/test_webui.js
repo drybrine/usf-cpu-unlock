@@ -45,6 +45,12 @@ els.seg = makeEl();
   b.setAttribute("data-p", p);
   els.seg.kids.push(b);
 });
+els.segSoff = makeEl();
+["powersave", "balance", "keep"].forEach(m => {
+  const b = makeEl();
+  b.setAttribute("data-s", m);
+  els.segSoff.kids.push(b);
+});
 
 // --- samples: quick (sysfs-only) and full status -----------------------------
 const QUICK_ACTIVE = [
@@ -101,6 +107,19 @@ const PROFILE_GAMING = [
   "watcher     : on (pid 4242)",
   "profile     : performance",
   "gamelist    : 2 package(s) -> /data/adb/.config/usf-cpu-unlock/gamelist.txt",
+  "governor    : performance (policy0)",
+  "screenoff   : keep",
+  "cpufreq caps (max vs hardware max):",
+  "  policy0: max=2000000 hw=2000000",
+  "  policy4: max=2600000 hw=2600000"
+].join("\n");
+
+const PROFILE_SAVER = [
+  "watcher     : on (pid 4242)",
+  "profile     : powersave",
+  "gamelist    : 3 package(s) -> /data/adb/.config/usf-cpu-unlock/gamelist.txt",
+  "governor    : powersave (policy0)",
+  "screenoff   : powersave",
   "cpufreq caps (max vs hardware max):",
   "  policy0: max=2000000 hw=2000000",
   "  policy4: max=2600000 hw=2600000"
@@ -177,7 +196,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // --- performance card ------------------------------------------------------
   check("profile-status issued in background", execCalls.some(c => /profile-status/.test(c)));
-  check("profile: label from watcher state", els.profTxt.textContent === "Max performance");
+  check("profile: label from watcher state", els.profTxt.textContent === "Max performance \u00b7\u00a0performance");
   check("profile: chip reads BOOST", els.profChip.textContent === "BOOST" && /(^|\s)on(\s|$)/.test(els.profChip.className));
   check("profile: matching segment selected",
         els.seg.kids.filter(b => b.className === "sel").length === 1 &&
@@ -186,6 +205,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("watcher: pid reported", els.watchTxt.textContent.indexOf("pid 4242") !== -1);
   check("watcher: aria-checked true", els.watchSw.getAttribute("aria-checked") === "true");
   check("gamelist: count rendered", els.glTxt.textContent.indexOf("2 packages") === 0);
+  check("screenoff: keep described", els.soffTxt.textContent.indexOf("Keep current profile") === 0);
+  check("screenoff: keep selected", els.segSoff.kids[2].className === "sel" &&
+        els.segSoff.kids[0].className !== "sel");
 
   // profile tap -> usfcpu.sh profile <name>
   const beforeCalls = execCalls.length;
@@ -193,6 +215,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await sleep(90);
   check("profile tap runs 'profile balance'",
         execCalls.slice(beforeCalls).some(c => /usfcpu\.sh profile balance/.test(c)));
+
+  // a profile tap must actually repaint the card (regression: action() used
+  // to call refresh() while busy was still true, so refresh bailed out and
+  // the card kept showing the old profile)
+  profileSample = PROFILE_SAVER;
+  els.seg.kids[3].onclick.call(els.seg.kids[3]); // saver
+  await sleep(120);
+  check("profile tap repaints the card", els.profTxt.textContent === "Battery saver \u00b7\u00a0powersave");
+  check("profile tap moves the selection", els.seg.kids[3].className === "sel" &&
+        els.seg.kids[0].className !== "sel");
+  check("profile tap clears busy", els.btnRefresh.disabled === false);
+  profileSample = PROFILE_GAMING;
+
+  // screen-off picker -> usfcpu.sh screenoff <mode>
+  const beforeSoff = execCalls.length;
+  els.segSoff.kids[1].onclick.call(els.segSoff.kids[1]); // balance
+  await sleep(90);
+  check("screenoff tap runs 'screenoff balance'",
+        execCalls.slice(beforeSoff).some(c => /usfcpu\.sh screenoff balance/.test(c)));
 
   // watcher switch tap -> watch off (switch was on)
   const beforeWatch = execCalls.length;

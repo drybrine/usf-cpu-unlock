@@ -1,7 +1,7 @@
 id=usf-cpu-unlock
 name=USF CPU Thermal Unlock (Transsion)
-version=v2.0.0
-versionCode=20
+version=v2.1.0
+versionCode=22
 author=drybrine
 updateJson=https://raw.githubusercontent.com/drybrine/usf-cpu-unlock/main/update.json
 description=Reversibly disables the Transsion USF skin-temperature CPU cluster cap (tran_thermal.xml) AND adds Encore-style performance profiles: an auto game watcher boosts clocks when a game is in the foreground and returns to balance otherwise. Bind-mounts a patched config over the original; original file is never modified. Kernel junction protection, skin-control TJ targets, charging and brightness policy stay stock. Verified against USF 26.08.05.001 (Infinix Note 60 X6879).

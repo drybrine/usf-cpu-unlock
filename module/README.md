@@ -55,6 +55,16 @@ tetap jalan di root sementara GhostLock:
 - game ada di list → `performance`; selain itu → `balance`; layar mati →
   `powersave`
 - berbasis state file, jadi profil yang sama tidak diterapkan dua kali
+- **pilihan manual menang**: profil yang dipilih dari WebUI/CLI dipatok selama
+  app itu masih di depan (patokan kedaluwarsa setelah 2 jam sebagai jaring
+  aman). Pindah app → watcher ambil alih lagi, dan `watch on|off` langsung
+  menghapus patokan
+- **perilaku saat layar mati bisa diatur** — `Saver` (default), `Balance`,
+  atau `Keep`. Pakai `Keep` kalau governor powersave bikin buka kunci ngelag:
+  `su -c '... usfcpu.sh screenoff keep'`
+- status layar dibaca dari node sysfs backlight, bukan `dumpsys power`, dan
+  power service cuma dipanggil saat transisi — jadi watcher cukup ringan buat
+  polling 2 detik dan profil sudah balik sebelum layar siap dipakai
 
 ```sh
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games add com.mobile.legends'
@@ -62,6 +72,7 @@ su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games list'
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh profile performance'
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh watch off'
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh profile-status'
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh screenoff keep'
 ```
 
 Config di `/data/adb/.config/usf-cpu-unlock` (`gamelist.txt`,

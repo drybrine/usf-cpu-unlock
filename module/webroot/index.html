@@ -80,7 +80,7 @@
              color: var(--primary, #ffb0cc); fill: currentColor; }
   .row .k { font-size: 13.5px; font-weight: 500; }
   .row .v { font-family: var(--mono); font-size: 12.5px; color: var(--on-surface-variant);
-            margin-top: 2px; word-break: break-all; }
+            margin-top: 2px; overflow-wrap: anywhere; }
   .row .v.ok { color: var(--ok, #a6d9a8); }
 
   /* buttons: filled / tonal / text, M3 shapes + ripple */
@@ -110,6 +110,7 @@
   .seg button { padding: 11px 4px; font-size: 12px; font-weight: 500;
                 background: var(--surface-container-high); color: var(--on-surface-variant); }
   .seg button.sel { background: var(--primary, #ffb0cc); color: var(--on-primary, #541d35); font-weight: 700; }
+  .seg.seg3 { grid-template-columns: repeat(3, 1fr); padding-bottom: 6px; }
   .switch { width: 48px; height: 28px; border-radius: 99px; flex: none; position: relative;
             background: var(--surface-container-highest); cursor: pointer;
             transition: background-color .2s ease; }
@@ -196,6 +197,18 @@
         <div class="v" id="watchTxt">&ndash;</div>
       </div>
       <div class="switch" id="watchSw" role="switch" aria-checked="false" tabindex="0"></div>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+      <div style="flex:1">
+        <div class="k">When the screen turns off</div>
+        <div class="v" id="soffTxt">&ndash;</div>
+      </div>
+    </div>
+    <div class="seg seg3" id="segSoff">
+      <button data-s="powersave">Saver</button>
+      <button data-s="balance">Balance</button>
+      <button data-s="keep">Keep</button>
     </div>
     <div class="row">
       <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
@@ -335,12 +348,11 @@ function runSh(sub) {
   });
 }
 
+// parseStatus returns ONLY the keys it found, so several partial responses
+// (quick / profile-status / engine dump) can be merged instead of each one
+// wiping the fields the others filled in.
 function parseStatus(text) {
-  var st = {
-    version: "?", mounted: null, pid: "\u2013",
-    p0: null, p4: null, engine: "\u2013",
-    prof: null, watch: null, watchPid: null, games: null
-  };
+  var st = {};
   for (var m, re, i = 0, lines = text.split("\n"); i < lines.length; i++) {
     var l = lines[i];
     if ((m = l.match(/^module\s+:\s*usf-cpu-unlock\s+(\S+)/))) st.version = m[1];
@@ -352,7 +364,7 @@ function parseStatus(text) {
       if (m[1] === "policy4") st.p4 = pol;
     }
     if ((m = l.match(/tempLevel=(\d+)/))) st.engine = "level " + m[1];
-    if ((m = l.match(/clusterCpu0=(\d+)/)) && m[1] === "0" && st.engine !== "\u2013") {
+    if ((m = l.match(/clusterCpu0=(\d+)/)) && m[1] === "0" && st.engine) {
       st.engine += " \u00b7 no CPU cap";
     }
     // profile-status section
@@ -362,11 +374,26 @@ function parseStatus(text) {
     }
     if ((m = l.match(/^profile\s+:\s*(\S+)/))) st.prof = m[1];
     if ((m = l.match(/^gamelist\s+:\s*(\d+)/))) st.games = parseInt(m[1], 10);
+    if ((m = l.match(/^governor\s+:\s*(\S+)/))) st.gov = m[1];
+    if ((m = l.match(/^screenoff\s+:\s*(\S+)/))) st.soff = m[1];
   }
   return st;
 }
 
-function render(st) {
+// Accumulated view of the module state: every render() call merges what it
+// learned and repaints, so a fast response paints immediately and a slow one
+// (the dumpsys-backed engine dump) only fills in its own fields later.
+var live = {
+  version: "?", mounted: null, pid: "\u2013",
+  p0: null, p4: null, engine: "\u2013",
+  prof: null, watch: null, watchPid: null, games: null, gov: null, soff: null
+};
+
+function render(update) {
+  for (var k in update) {
+    if (update[k] !== null && update[k] !== undefined) live[k] = update[k];
+  }
+  var st = live;
   $("ver").textContent = st.version;
   var dot = $("dot"), chip = $("stateChip");
   if (st.mounted === true) {
@@ -400,7 +427,7 @@ function render(st) {
                 balance: "Balanced", powersave: "Battery saver" };
   var prof = $("profTxt"), pchip = $("profChip");
   if (st.prof && st.prof !== "unknown") {
-    prof.textContent = names[st.prof] || st.prof;
+    prof.textContent = (names[st.prof] || st.prof) + (st.gov ? " \u00b7\u00a0" + st.gov : "");
     prof.className = "v";
     pchip.className = "chip" + (st.prof === "performance" || st.prof === "performance_lite" ? " on" : "");
     pchip.textContent = (st.prof === "performance" || st.prof === "performance_lite") ? "BOOST" : "NORMAL";
@@ -424,6 +451,15 @@ function render(st) {
     sw.className = "switch"; sw.setAttribute("aria-checked", "false");
     wtxt.textContent = "\u2013";
   }
+  var soffNames = { powersave: "Battery saver \u2014 smoothest battery, slowest wake",
+                    balance: "Balanced \u2014 mild drop, quick wake",
+                    keep: "Keep current profile \u2014 fastest wake" };
+  $("soffTxt").textContent = soffNames[st.soff] || "\u2013";
+  var sseg = $("segSoff").getElementsByTagName("button");
+  for (var j = 0; j < sseg.length; j++) {
+    sseg[j].className = (sseg[j].getAttribute("data-s") === st.soff) ? "sel" : "";
+  }
+
   $("glTxt").textContent = (st.games === null) ? "\u2013"
     : st.games + " package" + (st.games === 1 ? "" : "s") + " \u00b7 auto-boost on launch";
 }
@@ -437,16 +473,17 @@ function refresh() {
   return runSh("webui-quick").then(function (r) {
     render(parseStatus(r.stdout || ""));
     setBusy(false);
-    // profile-status is sysfs/state-file only (no dumpsys) — fetch it
-    // alongside the engine dump so both land together.
+    // Both follow-ups paint as soon as they land: profile-status is
+    // sysfs/state-file only (fast), while the engine dump has to run dumpsys
+    // and can take seconds. Merging keeps the fast one from being blocked.
     return Promise.all([
-      runSh("status").catch(function () { return null; }),
-      runSh("profile-status").catch(function () { return null; })
-    ]).then(function (res) {
-      if (busy) return;
-      var text = ((res[0] && res[0].stdout) || "") + "\n" + ((res[1] && res[1].stdout) || "");
-      render(parseStatus(text));
-    });
+      runSh("profile-status").then(function (r) {
+        render(parseStatus(r.stdout || ""));
+      }).catch(function () {}),
+      runSh("status").then(function (r) {
+        render(parseStatus(r.stdout || ""));
+      }).catch(function () {})
+    ]);
   }).catch(function () {
     $("stateLbl").textContent = "Error";
     $("stateNote").textContent = "could not run usfcpu.sh";
@@ -461,11 +498,13 @@ function action(sub, label, doneMsg) {
   // + engine verification loop); the button just stays disabled until done.
   runSh(sub).then(function () {
     toast(doneMsg);
-    return refresh();
-  }).catch(function () {
+  }, function () {
     toast(label + " failed");
   }).then(function () {
+    // Release the busy flag FIRST: refresh() bails out while busy is set, so
+    // calling it before this left the card showing the previous profile.
     setBusy(false);
+    return refresh();
   });
 }
 
@@ -473,8 +512,10 @@ function action(sub, label, doneMsg) {
 if (!window.ksu || typeof ksu.exec !== "function") {
   $("noKsu").style.display = "block";
   ["btnRestore", "btnRestart", "btnGlAdd"].forEach(function (id) { $(id).disabled = true; });
-  var segs = $("seg").getElementsByTagName("button");
-  for (var i = 0; i < segs.length; i++) segs[i].disabled = true;
+  ["seg", "segSoff"].forEach(function (id) {
+    var bs = $(id).getElementsByTagName("button");
+    for (var i = 0; i < bs.length; i++) bs[i].disabled = true;
+  });
   $("watchSw").style.opacity = ".4";
   $("watchSw").style.pointerEvents = "none";
 }
@@ -535,6 +576,15 @@ $("btnCopy").onclick = function () {
   sw.onkeydown = function (e) {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWatch(); }
   };
+  var sseg = $("segSoff").getElementsByTagName("button");
+  for (var k = 0; k < sseg.length; k++) {
+    ripple(sseg[k]);
+    sseg[k].onclick = function () {
+      var m = this.getAttribute("data-s");
+      if (!m) return;
+      action("screenoff " + m, "Setting screen-off mode\u2026", "Screen off: " + m);
+    };
+  }
   var addBtn = $("btnGlAdd"), input = $("glInput");
   ripple(addBtn);
   function addGame() {

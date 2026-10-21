@@ -57,6 +57,17 @@ it also runs under GhostLock temporary root:
 - game in the list → `performance`; anything else → `balance`; screen off →
   `powersave`
 - state-file driven, so it never re-applies the same profile twice
+- a **manual pick wins**: choosing a profile from the WebUI or the CLI pins it
+  while the current app stays in front (the pin expires after 2 h as a safety
+  net). Switching to another app hands control back to the watcher, and
+  `watch on|off` clears the pin immediately
+- **screen-off behaviour is configurable** — `Saver` (default), `Balance`, or
+  `Keep`. Use `Keep` if the powersave governor makes unlocking stutter:
+  `su -c '... usfcpu.sh screenoff keep'`
+- screen state is read from the backlight sysfs node, not `dumpsys power`, and
+  the power service is only consulted on a transition — so the watcher is
+  cheap enough to poll every 2 s and the profile is back before the lock
+  screen is usable
 
 ```sh
 su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games add com.mobile.legends'

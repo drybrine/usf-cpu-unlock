@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.1.0 (versionCode 22)
+
+- **Screen-off behaviour is now a setting**: `Saver` (default), `Balance`, or
+  `Keep`. `Keep` leaves the profile untouched when the panel turns off, which
+  removes the powersave-governor stutter when unlocking.
+  CLI: `usfcpu.sh screenoff {powersave|balance|keep}`; also a picker in the
+  WebUI performance card and a `screenoff` line in `profile-status`.
+- **Faster unlock**: the watcher no longer runs `dumpsys power` on every poll
+  (that call competes with the system exactly while the lock screen lifts).
+  Screen state now comes from the backlight sysfs node, and the power service
+  is only consulted once per transition - which also stops a dimmed panel or
+  AOD from being mistaken for "screen off".
+- While the panel is off the watcher polls that cheap node once a second, so
+  the profile is already back before the lock screen is usable, instead of up
+  to a full interval later. Default poll interval is now 2 s (was 5 s).
+- `status` no longer comes back empty: the engine dump is wrapped in a 6 s
+  timeout and reports why it is missing instead of printing nothing.
+- Value rows in the WebUI no longer break mid-word (`performan` / `ce`).
+
+## v2.0.1 (versionCode 21)
+
+Fixes manual profile switching from the WebUI.
+
+- **A profile tap now actually sticks.** The watcher used to re-apply its own
+  decision (usually `balance`) on the next poll — about 5 s after the tap — so
+  the card snapped straight back. A manual pick now writes a hold scoped to
+  the foreground app: the watcher leaves it alone while that app stays in
+  front, and hands control back when you switch to another app. Screen-off
+  still forces `powersave` (safety, not preference), and the hold expires
+  after 2 h so a wedged foreground detector cannot pin a profile forever.
+  `watch on` / `watch off` clear the hold immediately.
+- **The card repaints after an action.** `action()` called `refresh()` while
+  the busy flag was still set, and `refresh()` bails out while busy — so the
+  card kept showing the previous profile until you pressed Refresh yourself.
+- **The card fills in as data arrives.** Quick status paints first, then
+  `profile-status` (sysfs/state file, instant), then the dumpsys-backed
+  engine dump. Each response merges into the rendered state instead of
+  replacing it, so the slow dumpsys no longer delays the profile pill.
+- `profile-status` now reports the live CPU governor and the PPM max limit,
+  and the WebUI shows the governor next to the profile name — so a profile
+  that did not actually take effect is visible instead of guessed.
+
 ## v2.0.0 (versionCode 20)
 
 **Encore Tweaks merged in.** The module no longer just removes the USF CPU
