@@ -238,14 +238,22 @@
 <script>
 "use strict";
 var MOD = "/data/adb/modules/usf-cpu-unlock/usfcpu.sh";
-var $ = function (id) { return document.getElementById(id); };
 var busy = false;
+var busyLabel = "";
+var $ = function (id) { return document.getElementById(id); };
 
 // ---- KernelSU bridge ----------------------------------------------------
 // Contract (npm "kernelsu" 3.0.2): manager injects a global `ksu` object;
 // ksu.exec(cmd, optionsJSON, callbackName) invokes window[callbackName]
 // (errno, stdout, stderr). Some managers instead return a promise from a
 // 2-arg ksu.exec(cmd, options) -- the thenable branch covers those.
+// The manager bridge is not guaranteed to call back: a long-running command
+// (the profiler writes dozens of sysfs nodes) or a busy bridge can swallow
+// the callback. Without a timeout the promise never settles, `busy` stays
+// true and the page is wedged on its busy label forever.
+var EXEC_TIMEOUT = (typeof window.USF_EXEC_TIMEOUT === "number" && window.USF_EXEC_TIMEOUT > 0)
+  ? window.USF_EXEC_TIMEOUT : 20000;
+
 function ksuExec(cmd) {
   return new Promise(function (resolve, reject) {
     if (!window.ksu || typeof ksu.exec !== "function") {
@@ -254,27 +262,37 @@ function ksuExec(cmd) {
     }
     var name = "usf_cb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
     var settled = false;
-    window[name] = function (errno, stdout, stderr) {
+    var timer = setTimeout(function () {
+      if (settled) return;
       settled = true;
-      resolve({ errno: errno, stdout: stdout || "", stderr: stderr || "" });
+      try { delete window[name]; } catch (e) { window[name] = undefined; }
+      var err = new Error("command timed out");
+      err.timeout = true;
+      reject(err);
+    }, EXEC_TIMEOUT);
+    function settle(fn, val) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(val);
+    }
+    window[name] = function (errno, stdout, stderr) {
+      settle(resolve, { errno: errno, stdout: stdout || "", stderr: stderr || "" });
       try { delete window[name]; } catch (e) { window[name] = undefined; }
     };
     try {
       var r = ksu.exec(cmd, "{}", name);
       if (r && typeof r.then === "function") {
         r.then(function (out) {
-          if (!settled) {
-            settled = true;
-            resolve({
-              errno: (out && out.errno !== undefined) ? out.errno : 0,
-              stdout: (out && out.stdout) || "",
-              stderr: (out && out.stderr) || ""
-            });
-          }
-        }, function (err) { if (!settled) { settled = true; reject(err); } });
+          settle(resolve, {
+            errno: (out && out.errno !== undefined) ? out.errno : 0,
+            stdout: (out && out.stdout) || "",
+            stderr: (out && out.stderr) || ""
+          });
+        }, function (err) { settle(reject, err); });
       }
     } catch (e) {
-      if (!settled) { settled = true; reject(e); }
+      settle(reject, e);
     }
   });
 }
@@ -309,11 +327,16 @@ function ghz(khz) {
 
 function setBusy(b, label) {
   busy = b;
+  busyLabel = b ? (label || "Working\u2026") : "";
   ["btnRestore", "btnRestart", "btnRefresh"].forEach(function (id) {
     $(id).disabled = b;
   });
   if (b) {
-    $("stateLbl").innerHTML = '<span class="spin"></span>' + (label || "Working\u2026");
+    $("stateLbl").innerHTML = '<span class="spin"></span>' + busyLabel;
+  } else {
+    // Never leave the busy label behind: repaint the hero from the last
+    // known state (a failed or timed-out command has no new data anyway).
+    renderHero();
   }
 }
 
@@ -389,11 +412,14 @@ var live = {
   prof: null, watch: null, watchPid: null, games: null, gov: null, soff: null
 };
 
-function render(update) {
-  for (var k in update) {
-    if (update[k] !== null && update[k] !== undefined) live[k] = update[k];
-  }
+function renderHero() {
   var st = live;
+  // A repaint must not cancel the progress indicator of an action in flight.
+  if (busy && busyLabel) {
+    $("ver").textContent = st.version;
+    $("stateLbl").innerHTML = '<span class="spin"></span>' + busyLabel;
+    return;
+  }
   $("ver").textContent = st.version;
   var dot = $("dot"), chip = $("stateChip");
   if (st.mounted === true) {
@@ -412,6 +438,14 @@ function render(update) {
     $("stateLbl").textContent = "Unknown";
     $("stateNote").textContent = "module not found on this install";
   }
+}
+
+function render(update) {
+  for (var k in update) {
+    if (update[k] !== null && update[k] !== undefined) live[k] = update[k];
+  }
+  var st = live;
+  renderHero();
   function polHtml(p) {
     if (!p) return "\u2013";
     return ghz(p.max) + " / " + ghz(p.hw) + (p.free ? " \u2713" : "");
@@ -427,7 +461,7 @@ function render(update) {
                 balance: "Balanced", powersave: "Battery saver" };
   var prof = $("profTxt"), pchip = $("profChip");
   if (st.prof && st.prof !== "unknown") {
-    prof.textContent = (names[st.prof] || st.prof) + (st.gov ? " \u00b7\u00a0" + st.gov : "");
+    prof.textContent = (names[st.prof] || st.prof) + (st.gov ? "\u00a0\u00b7\u00a0" + st.gov : "");
     prof.className = "v";
     pchip.className = "chip" + (st.prof === "performance" || st.prof === "performance_lite" ? " on" : "");
     pchip.textContent = (st.prof === "performance" || st.prof === "performance_lite") ? "BOOST" : "NORMAL";
@@ -491,20 +525,27 @@ function refresh() {
   });
 }
 
-function action(sub, label, doneMsg) {
+// action(sub, label, doneMsg, optimistic)
+// `optimistic` paints the intended result immediately, so the tap is visible
+// before the shell command finishes (and even if the bridge never answers).
+function action(sub, label, doneMsg, optimistic) {
   if (busy) return;
   setBusy(true, label);
-  // apply/restore can legitimately take up to ~75s (mount + USF restart wait
-  // + engine verification loop); the button just stays disabled until done.
+  if (typeof optimistic === "function") {
+    try { optimistic(); } catch (e) {}
+  }
   runSh(sub).then(function () {
     toast(doneMsg);
-  }, function () {
-    toast(label + " failed");
+  }, function (err) {
+    toast((err && err.timeout) ? (label.replace(/\u2026$/, "") + ": no response from the manager")
+                               : (label + " failed"));
   }).then(function () {
     // Release the busy flag FIRST: refresh() bails out while busy is set, so
     // calling it before this left the card showing the previous profile.
     setBusy(false);
     return refresh();
+  }).catch(function () {
+    setBusy(false);
   });
 }
 
@@ -562,7 +603,13 @@ $("btnCopy").onclick = function () {
     seg[i].onclick = function () {
       var p = this.getAttribute("data-p");
       if (!p) return;
-      action("profile " + p, "Applying " + p + "\u2026", "Profile: " + p);
+      action("profile " + p, "Applying " + p + "\u2026", "Profile: " + p, function () {
+        live.prof = p;
+        // mirror what the profiler will set, so the row is not briefly
+        // self-contradictory (profile name next to the old governor)
+        live.gov = (p === "performance" || p === "powersave") ? p : "schedutil";
+        render({});
+      });
     };
   }
   var sw = $("watchSw");
@@ -570,7 +617,12 @@ $("btnCopy").onclick = function () {
     var turningOn = sw.className.indexOf("on") === -1;
     action("watch " + (turningOn ? "on" : "off"),
            turningOn ? "Starting watcher\u2026" : "Stopping watcher\u2026",
-           turningOn ? "Auto game watcher on" : "Auto game watcher off");
+           turningOn ? "Auto game watcher on" : "Auto game watcher off",
+           function () {
+             live.watch = turningOn;
+             if (!turningOn) live.watchPid = null;
+             render({});
+           });
   }
   sw.onclick = toggleWatch;
   sw.onkeydown = function (e) {
@@ -582,7 +634,10 @@ $("btnCopy").onclick = function () {
     sseg[k].onclick = function () {
       var m = this.getAttribute("data-s");
       if (!m) return;
-      action("screenoff " + m, "Setting screen-off mode\u2026", "Screen off: " + m);
+      action("screenoff " + m, "Setting screen-off mode\u2026", "Screen off: " + m, function () {
+        live.soff = m;
+        render({});
+      });
     };
   }
   var addBtn = $("btnGlAdd"), input = $("glInput");
@@ -599,6 +654,18 @@ $("btnCopy").onclick = function () {
   addBtn.onclick = addGame;
   input.onkeydown = function (e) { if (e.key === "Enter") addGame(); };
 })();
+
+// The watcher changes the profile in the background, so the card must not
+// go stale: refresh when the page becomes visible again, and lightly while
+// it stays visible (skipped while a command is in flight).
+if (document.addEventListener) {
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) refresh();
+  });
+}
+setInterval(function () {
+  if (!document.hidden) refresh();
+}, 20000);
 
 refresh();
 </script>

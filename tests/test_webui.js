@@ -20,23 +20,43 @@ const script = m[1];
 
 // --- minimal DOM stub ---------------------------------------------------------
 function makeEl() {
-  return {
-    textContent: "", innerHTML: "", className: "", disabled: false,
+  const el = {
+    className: "", disabled: false,
     style: {}, onclick: null, onkeydown: null,
     children: [], kids: [], attrs: {},
-    // mirror real DOM behavior: appending a child contributes its text
-    appendChild(c) { this.children.push(c); this.textContent += c.textContent; },
-    setAttribute(k, v) { this.attrs[k] = String(v); },
-    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
-    // enough of the HTMLCollection contract for the page's loops
-    getElementsByTagName() { return this.kids; },
-    scrollTop: 0, scrollHeight: 0
+    scrollTop: 0, scrollHeight: 0,
+    _text: "", _html: ""
   };
+  // Mirror the real DOM: textContent and innerHTML are two views of the same
+  // content, so assigning one clears the other. Without this a page that
+  // resets the hero with textContent would still "contain" a stale spinner
+  // in innerHTML and the harness would report a bug that browsers do not have.
+  Object.defineProperty(el, "textContent", {
+    get() { return el._text; },
+    set(v) { el._text = String(v); el._html = ""; el.children = []; }
+  });
+  Object.defineProperty(el, "innerHTML", {
+    get() { return el._html; },
+    set(v) { el._html = String(v); el._text = String(v).replace(/<[^>]*>/g, ""); }
+  });
+  el.appendChild = function (c) { el.children.push(c); el._text += c.textContent; };
+  el.setAttribute = function (k, v) { el.attrs[k] = String(v); };
+  el.getAttribute = function (k) {
+    return Object.prototype.hasOwnProperty.call(el.attrs, k) ? el.attrs[k] : null;
+  };
+  // enough of the HTMLCollection contract for the page's loops
+  el.getElementsByTagName = function () { return el.kids; };
+  return el;
 }
 const els = {};
+const docHandlers = {};
 const document = {
   getElementById(id) { return els[id] || (els[id] = makeEl()); },
-  createElement() { return makeEl(); }
+  createElement() { return makeEl(); },
+  hidden: false,
+  visibilityState: "visible",
+  addEventListener(type, fn) { (docHandlers[type] = docHandlers[type] || []).push(fn); },
+  removeEventListener() {}
 };
 // static markup the script queries by collection: the profile segmented row
 els.seg = makeEl();
@@ -139,6 +159,8 @@ let quickSample = QUICK_ACTIVE;
 let profileSample = PROFILE_GAMING;
 const execCalls = [];
 const toasts = [];
+// command substrings that must never call back (simulates a wedged bridge)
+let hangOn = null;
 
 // ksu.exec per the npm "kernelsu" 3.0.2 contract: callback style.
 // quick commands answer in 5ms, full status in 40ms.
@@ -146,6 +168,7 @@ const ksu = {
   exec(cmd, optionsJson, callbackName) {
     execCalls.push(cmd);
     if (typeof optionsJson !== "string") throw new Error("options must be a JSON string");
+    if (hangOn && cmd.indexOf(hangOn) !== -1) return; // never settles
     const quick = cmd.indexOf("webui-quick") !== -1;
     const prof = cmd.indexOf("profile-status") !== -1;
     const out = quick ? quickSample : (prof ? profileSample : fullSample);
@@ -158,6 +181,7 @@ const ksu = {
 };
 
 globalThis.window = globalThis;
+globalThis.USF_EXEC_TIMEOUT = 300; // fast timeout so the suite stays quick
 globalThis.document = document;
 globalThis.ksu = ksu;
 globalThis.navigator = {};
@@ -196,7 +220,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // --- performance card ------------------------------------------------------
   check("profile-status issued in background", execCalls.some(c => /profile-status/.test(c)));
-  check("profile: label from watcher state", els.profTxt.textContent === "Max performance \u00b7\u00a0performance");
+  check("profile: label from watcher state", els.profTxt.textContent === "Max performance\u00a0\u00b7\u00a0performance");
   check("profile: chip reads BOOST", els.profChip.textContent === "BOOST" && /(^|\s)on(\s|$)/.test(els.profChip.className));
   check("profile: matching segment selected",
         els.seg.kids.filter(b => b.className === "sel").length === 1 &&
@@ -222,7 +246,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   profileSample = PROFILE_SAVER;
   els.seg.kids[3].onclick.call(els.seg.kids[3]); // saver
   await sleep(120);
-  check("profile tap repaints the card", els.profTxt.textContent === "Battery saver \u00b7\u00a0powersave");
+  check("profile tap repaints the card", els.profTxt.textContent === "Battery saver\u00a0\u00b7\u00a0powersave");
   check("profile tap moves the selection", els.seg.kids[3].className === "sel" &&
         els.seg.kids[0].className !== "sel");
   check("profile tap clears busy", els.btnRefresh.disabled === false);
@@ -266,6 +290,50 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   els.btnLog.onclick();
   check("toggle: log hidden again", els.log.style.display === "none");
   check("toggle: label reads Show log", els.btnLog.textContent.indexOf("Show log") === 0);
+
+  // --- robustness: the UI must never stay stuck on a busy label --------------
+  // (device report: hero stuck at "Applying balance…", profile card stale)
+
+  // 1) a tap repaints immediately, before the shell command answers
+  profileSample = PROFILE_SAVER;
+  hangOn = "profile powersave";          // command never calls back
+  els.seg.kids[3].onclick.call(els.seg.kids[3]);
+  await sleep(20);
+  check("tap paints the profile optimistically",
+        els.profTxt.textContent.indexOf("Battery saver") === 0);
+  check("tap moves the selection optimistically", els.seg.kids[3].className === "sel");
+  check("optimistic repaint keeps the progress label",
+        els.stateLbl.innerHTML.indexOf("spin") !== -1 &&
+        els.stateLbl.textContent.indexOf("Applying") !== -1);
+
+  // 2) a command that never answers must not wedge the UI
+  await sleep(450);                      // past USF_EXEC_TIMEOUT (300ms)
+  check("hung command releases busy", els.btnRefresh.disabled === false);
+  check("hung command restores the hero",
+        els.stateLbl.textContent === "Patch ACTIVE" &&
+        els.stateLbl.innerHTML.indexOf("spin") === -1);
+  check("hung command warns the user",
+        toasts.some(t => /timed out|no response/i.test(t)));
+  hangOn = null;
+
+  // 3) a failing follow-up must still clear the busy label
+  hangOn = null;
+  els.seg.kids[2].onclick.call(els.seg.kids[2]); // balance
+  await sleep(120);
+  check("completed action leaves no spinner in the hero",
+        els.stateLbl.innerHTML.indexOf("spin") === -1);
+  check("completed action re-enables the buttons", els.btnRefresh.disabled === false);
+
+  // 4) coming back to the page refreshes the card (watcher may have moved on)
+  check("visibilitychange handler registered",
+        (docHandlers.visibilitychange || []).length > 0);
+  const beforeVis = execCalls.length;
+  document.hidden = false;
+  document.visibilityState = "visible";
+  (docHandlers.visibilitychange || []).forEach(fn => fn());
+  await sleep(90);
+  check("returning to the page triggers a refresh",
+        execCalls.slice(beforeVis).some(c => /webui-quick/.test(c)));
 
   // --- stock sample ----------------------------------------------------------
   fullSample = FULL_STOCK;

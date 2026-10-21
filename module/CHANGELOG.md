@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.1.1 (versionCode 23)
+
+Fixes the WebUI getting stuck on its busy label after a profile switch.
+
+- **The bridge call now has a timeout (20 s).** `ksu.exec` is not guaranteed to
+  call back — the profiler writes dozens of sysfs nodes, and a slow or busy
+  manager can swallow the callback. The promise never settled, so `busy`
+  stayed true forever: the hero sat on "Applying balance…", every button
+  stayed disabled and no refresh ever ran.
+- **A busy label can no longer survive the action.** Clearing the busy flag now
+  repaints the hero from the last known state instead of leaving whatever text
+  the spinner had.
+- **Taps paint immediately.** The profile pill, the segment highlight and the
+  governor hint update the moment you tap, before the shell command answers,
+  then reconcile with real status. Same for the screen-off picker and the
+  watcher switch. The progress spinner is preserved across those repaints.
+- **The card refreshes itself** when the page becomes visible again and every
+  20 s while it is on screen, so a background watcher switch shows up without
+  pressing Refresh.
+- WebUI harness now mirrors real DOM semantics for `textContent`/`innerHTML`
+  (assigning one clears the other), so stale-markup bugs are actually caught.
+
 ## v2.1.0 (versionCode 22)
 
 - **Screen-off behaviour is now a setting**: `Saver` (default), `Balance`, or
