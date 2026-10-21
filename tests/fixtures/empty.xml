@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<thermalEngineConfig version="1">
+    <temperature gap="600"/>
+</thermalEngineConfig>

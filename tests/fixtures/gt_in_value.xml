@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<thermalEngineConfig version="1">
+  <thermalPolicyConfig cpu_enable="true">
+    <default enable="true">
+      <common_config>
+        <temp_config tempLevel="43" tempLevelClear="2" note="a>b" cpu="2" clusterCpu0="1700000" clusterCpu1="2100000" clusterCpu2="0"/>
+      </common_config>
+    </default>
+  </thermalPolicyConfig>
+</thermalEngineConfig>

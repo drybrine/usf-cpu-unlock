@@ -1,0 +1,6 @@
+id=usf-cpu-unlock
+name=USF CPU Thermal Unlock (Transsion)
+version=v1.0.5
+versionCode=6
+author=drybrine
+description=Reversibly disables ONLY the Transsion USF skin-temperature CPU cluster cap (tran_thermal.xml). Bind-mounts a patched config over the original and restarts com.transsion.usf so it reloads through its own no-limit path. Kernel junction protection, skin-control TJ targets, charging, GPU and brightness policy stay stock. Original file is never modified. Verified against USF 26.08.05.001 (Infinix Note 60 X6879).

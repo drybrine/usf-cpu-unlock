@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<thermalEngineConfig version="1">
+  <temp_config tempLevel="41" tempLevelClear="2" cpu="0" clusterCpu0="0" clusterCpu1="5" clusterCpu2="0"/>
+</thermalEngineConfig>

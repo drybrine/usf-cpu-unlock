@@ -1,0 +1,9 @@
+# runtime artifacts if the module is run in-tree
+apply.log
+backup/
+patched/
+.lock
+disable-auto
+
+# build output
+*.zip
