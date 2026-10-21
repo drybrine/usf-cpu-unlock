@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.2.0 (versionCode 8)
+
+- **WebUI**: the module now ships `webroot/index.html` — open it from the
+  manager's module page (KernelSU / APatch / MMRL). One-tap Apply / Restore /
+  Restart USF, live status card (patch state, per-cluster ceilings vs
+  hardware max, USF engine level + pid) and a copyable command log.
+  Self-contained single file (no bundler); uses the documented
+  `ksu.exec(cmd, optionsJSON, callbackName)` contract with a promise-style
+  fallback for managers that return one.
+- Host-side WebUI test suite (`node tests/test_webui.js`): runs the page's
+  actual script under Node with stubbed `window/ksu/document` against the
+  real `status` output format — 15 assertions covering active and stock
+  states.
+
 ## v1.1.0 (versionCode 7)
 
 - **In-manager update support**: `module.prop` now carries an `updateJson`

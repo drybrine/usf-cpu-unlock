@@ -44,6 +44,14 @@ su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh restore'  # back to stock
 
 The **Action** button in the manager toggles apply/restore. Auto-apply on module load can be disabled with a `disable-auto` file in the module directory. `uninstall.sh` restores stock behavior before removal.
 
+### WebUI
+
+The module ships a WebUI — open it from the module's page in the manager
+(KernelSU / APatch / MMRL). One-tap **Apply / Restore / Restart USF**, a live
+status card (patch state, per-cluster ceilings vs hardware max, engine level,
+USF pid) and a copyable command log. Single self-contained
+`webroot/index.html` — no bundler, no network access.
+
 A working apply looks like this:
 
 ```text
@@ -79,7 +87,7 @@ The device **can run hotter** under sustained load than XOS intends, and battery
 - The patcher (`patch_xml.awk`) refuses input it cannot rewrite safely (unterminated tags, `>` inside quoted values); nothing is mounted unless the patched file passes a separate verifier (`verify_xml.awk`) **and** a `<temp_config>` count check
 - Process restarts target only PIDs whose `/proc/PID/cmdline` is exactly `com.transsion.usf` (re-read immediately before each kill)
 - apply/restore are serialized with a lockfile; a second apply is a no-op
-- Host-side test suite: `sh tests/run_tests.sh` (11 tests: pretty/minified/CRLF/single-quoted XML, decoy attribute names, idempotency, negative gates)
+- Host-side test suite: `sh tests/run_tests.sh` (11 tests: pretty/minified/CRLF/single-quoted XML, decoy attribute names, idempotency, negative gates) plus `node tests/test_webui.js` (15 assertions against the WebUI's actual script with a stubbed `ksu` bridge)
 
 ## Compatibility
 

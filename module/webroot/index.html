@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>usf-cpu-unlock</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --card: #171c22;
+    --card2: #1c232b;
+    --text: #e6ebf0;
+    --muted: #8b97a3;
+    --accent: #4da3ff;
+    --green: #35c37d;
+    --red: #e0564f;
+    --amber: #e0a34f;
+    --border: #262f39;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 4px 0 2px; display: flex; align-items: center; gap: 8px; }
+  h1 .chip { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--card2);
+             border: 1px solid var(--border); padding: 2px 8px; border-radius: 99px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  .state { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--green); box-shadow: 0 0 10px rgba(53,195,125,.5); }
+  .dot.off { background: var(--red); }
+  .state .lbl { font-weight: 700; font-size: 16px; }
+  .state .note { color: var(--muted); font-size: 12.5px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .kv { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .kv .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .kv .v { font-family: var(--mono); font-size: 13.5px; margin-top: 1px; word-break: break-all; }
+  .kv .v.ok { color: var(--green); }
+  .kv .v.bad { color: var(--red); }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  button {
+    appearance: none; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card2); color: var(--text); font: 600 14px/1 inherit;
+    padding: 13px 10px; cursor: pointer;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .45; pointer-events: none; }
+  button.primary { background: #1d4d8f; border-color: #2a62ad; }
+  button.warn { background: #57302d; border-color: #6d3a36; }
+  button.wide { grid-column: 1 / -1; }
+  .log {
+    background: #0b0e11; border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word; max-height: 340px; overflow-y: auto;
+    color: #b9c4cf;
+  }
+  .log .in { color: var(--accent); }
+  .banner {
+    display: none; background: #3a2f14; border: 1px solid #69531f; color: #ecc978;
+    border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+  }
+  .spin {
+    display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.25); border-top-color: #fff;
+    animation: r .8s linear infinite; vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .foot { color: var(--muted); font-size: 11.5px; text-align: center; margin-top: 4px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>USF CPU Unlock <span class="chip" id="ver">v?</span></h1>
+  <p class="sub">Transsion skin-thermal CPU cap &mdash; everything else stays stock</p>
+
+  <div class="banner" id="noKsu">
+    &#9888;&#65039; KernelSU API not found. Open this page from your module manager
+    (KernelSU / APatch / MMRL) for it to work.
+  </div>
+
+  <div class="card">
+    <div class="state">
+      <span class="dot" id="dot"></span>
+      <div>
+        <div class="lbl" id="stateLbl">Checking&hellip;</div>
+        <div class="note" id="stateNote">querying module state</div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="kv"><div class="k">Little cluster</div><div class="v" id="p0">&ndash;</div></div>
+      <div class="kv"><div class="k">Big cluster</div><div class="v" id="p4">&ndash;</div></div>
+      <div class="kv"><div class="k">USF engine</div><div class="v" id="engine">&ndash;</div></div>
+      <div class="kv"><div class="k">USF pid</div><div class="v" id="pid">&ndash;</div></div>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button class="primary" id="btnApply">&#9650; Apply</button>
+    <button class="warn" id="btnRestore">&#9632; Restore</button>
+    <button id="btnRestart">Restart USF</button>
+    <button id="btnRefresh">Refresh</button>
+    <button class="wide" id="btnCopy">Copy status output</button>
+  </div>
+
+  <div class="log" id="log"></div>
+  <p class="foot">
+    apply = mount patched config + reload USF &middot; restore = stock behavior<br>
+    Junction / skin-TJ / charging / GPU policy are never touched
+  </p>
+</div>
+
+<script>
+"use strict";
+var MOD = "/data/adb/modules/usf-cpu-unlock/usfcpu.sh";
+var $ = function (id) { return document.getElementById(id); };
+var busy = false;
+
+// ---- KernelSU bridge ----------------------------------------------------
+// Contract (npm "kernelsu" 3.0.2): manager injects a global `ksu` object;
+// ksu.exec(cmd, optionsJSON, callbackName) invokes window[callbackName]
+// (errno, stdout, stderr). Some managers instead return a promise from a
+// 2-arg ksu.exec(cmd, options) -- the thenable branch covers those.
+function ksuExec(cmd) {
+  return new Promise(function (resolve, reject) {
+    if (!window.ksu || typeof ksu.exec !== "function") {
+      reject(new Error("ksu.exec unavailable"));
+      return;
+    }
+    var name = "usf_cb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+    var settled = false;
+    window[name] = function (errno, stdout, stderr) {
+      settled = true;
+      resolve({ errno: errno, stdout: stdout || "", stderr: stderr || "" });
+      try { delete window[name]; } catch (e) { window[name] = undefined; }
+    };
+    try {
+      var r = ksu.exec(cmd, "{}", name);
+      if (r && typeof r.then === "function") {
+        r.then(function (out) {
+          if (!settled) {
+            settled = true;
+            resolve({
+              errno: (out && out.errno !== undefined) ? out.errno : 0,
+              stdout: (out && out.stdout) || "",
+              stderr: (out && out.stderr) || ""
+            });
+          }
+        }, function (err) { if (!settled) { settled = true; reject(err); } });
+      }
+    } catch (e) {
+      if (!settled) { settled = true; reject(e); }
+    }
+  });
+}
+
+function toast(msg) {
+  try { if (window.ksu && typeof ksu.toast === "function") ksu.toast(msg); } catch (e) {}
+}
+
+// ---- UI helpers -----------------------------------------------------------
+function logLine(text, cls) {
+  var el = $("log");
+  var span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text + "\n";
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function logRun(cmd) {
+  var el = $("log");
+  var span = document.createElement("span");
+  span.className = "in";
+  span.textContent = "$ " + cmd + "\n";
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ghz(khz) {
+  var n = parseInt(khz, 10);
+  return isNaN(n) ? "\u2013" : (n / 1000000).toFixed(2) + " GHz";
+}
+
+function setBusy(b, label) {
+  busy = b;
+  ["btnApply", "btnRestore", "btnRestart", "btnRefresh"].forEach(function (id) {
+    $(id).disabled = b;
+  });
+  if (b) {
+    $("stateLbl").innerHTML = '<span class="spin"></span>' + (label || "Working\u2026");
+  }
+}
+
+// ---- Commands -------------------------------------------------------------
+function runSh(sub) {
+  var cmd = "sh " + MOD + " " + sub;
+  logRun(cmd);
+  return ksuExec(cmd).then(function (r) {
+    var out = (r.stdout || "") + (r.stderr ? "\n[stderr] " + r.stderr : "");
+    logLine(out.replace(/\n+$/, ""));
+    return r;
+  }, function (err) {
+    logLine("[exec failed] " + err);
+    throw err;
+  });
+}
+
+function parseStatus(text) {
+  var st = {
+    version: "?", mounted: null, pid: "\u2013",
+    p0: null, p4: null, engine: "\u2013"
+  };
+  for (var m, re, i = 0, lines = text.split("\n"); i < lines.length; i++) {
+    var l = lines[i];
+    if ((m = l.match(/^module\s+:\s*usf-cpu-unlock\s+(\S+)/))) st.version = m[1];
+    if ((m = l.match(/^patch mount:\s+(ACTIVE|inactive)/))) st.mounted = (m[1] === "ACTIVE");
+    if ((m = l.match(/^usf pid\(s\)\s*:\s*(.*)$/))) st.pid = m[1].trim() || "not running";
+    if ((m = l.match(/^\s*(policy\d+):\s*max=(\d+)\s*hw=(\d+)/))) {
+      var pol = { max: m[2], hw: m[3], free: m[2] === m[3] };
+      if (m[1] === "policy0") st.p0 = pol;
+      if (m[1] === "policy4") st.p4 = pol;
+    }
+    if ((m = l.match(/tempLevel=(\d+)/))) st.engine = "level " + m[1];
+    if ((m = l.match(/clusterCpu0=(\d+)/)) && m[1] === "0" && st.engine !== "\u2013") {
+      st.engine += " \u00b7 no CPU cap";
+    }
+  }
+  return st;
+}
+
+function render(st) {
+  $("ver").textContent = st.version;
+  var dot = $("dot");
+  if (st.mounted === true) {
+    dot.className = "dot on";
+    $("stateLbl").textContent = "Patch ACTIVE";
+    $("stateNote").textContent = "USF skin-thermal CPU cap is disabled";
+  } else if (st.mounted === false) {
+    dot.className = "dot off";
+    $("stateLbl").textContent = "Stock behavior";
+    $("stateNote").textContent = "USF CPU cap follows skin temperature";
+  } else {
+    dot.className = "dot";
+    $("stateLbl").textContent = "Unknown";
+    $("stateNote").textContent = "module not found on this install";
+  }
+  function polHtml(p) {
+    if (!p) return "\u2013";
+    return ghz(p.max) + " / " + ghz(p.hw) + (p.free ? " \u2713" : "");
+  }
+  var p0 = $("p0"), p4 = $("p4");
+  p0.textContent = polHtml(st.p0); p0.className = "v" + (st.p0 && st.p0.free ? " ok" : "");
+  p4.textContent = polHtml(st.p4); p4.className = "v" + (st.p4 && st.p4.free ? " ok" : "");
+  $("engine").textContent = st.engine;
+  $("pid").textContent = st.pid;
+}
+
+function refresh() {
+  if (busy) return Promise.resolve();
+  setBusy(true, "Refreshing\u2026");
+  return runSh("status").then(function (r) {
+    render(parseStatus(r.stdout || ""));
+  }).catch(function () {
+    $("stateLbl").textContent = "Error";
+    $("stateNote").textContent = "could not run usfcpu.sh";
+  }).then(function () {
+    setBusy(false);
+    if (parseStatus.lastErr) delete parseStatus.lastErr;
+  });
+}
+
+function action(sub, label, doneMsg) {
+  if (busy) return;
+  setBusy(true, label);
+  // apply/restore can legitimately take up to ~75s (mount + USF restart wait
+  // + engine verification loop); the button just stays disabled until done.
+  runSh(sub).then(function () {
+    toast(doneMsg);
+    return refresh();
+  }).catch(function () {
+    toast(label + " failed");
+  }).then(function () {
+    setBusy(false);
+  });
+}
+
+// ---- Wiring ----------------------------------------------------------------
+if (!window.ksu || typeof ksu.exec !== "function") {
+  $("noKsu").style.display = "block";
+  ["btnApply", "btnRestore", "btnRestart"].forEach(function (id) { $(id).disabled = true; });
+}
+
+$("btnRefresh").onclick = function () { refresh(); };
+$("btnApply").onclick = function () {
+  action("apply", "Applying\u2026", "Patch applied");
+};
+$("btnRestore").onclick = function () {
+  action("restore", "Restoring\u2026", "Stock behavior restored");
+};
+$("btnRestart").onclick = function () {
+  action("restart-usf", "Restarting USF\u2026", "USF restarted");
+};
+$("btnCopy").onclick = function () {
+  var text = $("log").textContent || "";
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { toast("Copied"); },
+                                            function () { toast("Copy failed"); });
+  } else {
+    toast("Clipboard unavailable");
+  }
+};
+
+refresh();
+</script>
+</body>
+</html>

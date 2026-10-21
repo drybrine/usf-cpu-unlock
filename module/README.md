@@ -62,6 +62,14 @@ su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh restore'
 
 Tombol **Action** di manager = toggle apply/restore.
 
+### WebUI
+
+Module ini punya WebUI — buka dari halaman module di manager (KernelSU /
+APatch / MMRL). Tombol **Apply / Restore / Restart USF** sekali tap, kartu
+status live (status patch, ceiling tiap cluster vs max hardware, level
+engine, pid USF), dan log command yang bisa di-copy. Satu file
+`webroot/index.html` mandiri — tanpa bundler, tanpa akses jaringan.
+
 Riwayat versi tersimpan di dalam module:
 
 ```sh
