@@ -5,79 +5,118 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>usf-cpu-unlock</title>
 <style>
+  /* Material-3 tokens (Encore defaults) — a Material-You manager can override
+     the --primary etc. vars; every use carries a fallback. */
   :root {
-    --bg: #0f1216;
-    --card: #171c22;
-    --card2: #1c232b;
-    --text: #e6ebf0;
-    --muted: #8b97a3;
-    --accent: #4da3ff;
-    --green: #35c37d;
-    --red: #e0564f;
-    --amber: #e0a34f;
-    --border: #262f39;
+    --primary: #ffb0cc;
+    --on-primary: #541d35;
+    --secondary-container: #5a3f48;
+    --on-secondary-container: #ffd9e4;
+    --background: #1c1014;
+    --on-background: #f2dde2;
+    --surface: #1c1014;
+    --on-surface: #f2dde2;
+    --on-surface-variant: #d5c2c6;
+    --surface-container: #281c20;
+    --surface-container-high: #33272a;
+    --surface-container-highest: #3e3135;
+    --surface-container-low: #23191c;
+    --surface-container-lowest: #18090f;
+    --error: #f2b8b5;
+    --on-error: #601410;
+    --error-container: #8c1d18;
+    --on-error-container: #f9dedc;
+    --outline: #9d8c91;
+    --outline-variant: #514347;
+    --ok: #a6d9a8;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
-    margin: 0; padding: 16px;
-    background: var(--bg); color: var(--text);
+    margin: 0; padding: 20px 16px 32px;
+    background: var(--background); color: var(--on-background);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 19px; margin: 4px 0 2px; display: flex; align-items: center; gap: 8px; }
-  h1 .chip { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--card2);
-             border: 1px solid var(--border); padding: 2px 8px; border-radius: 99px; }
-  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-          padding: 14px 16px; margin-bottom: 14px; }
-  .state { display: flex; align-items: center; gap: 10px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.on { background: var(--green); box-shadow: 0 0 10px rgba(53,195,125,.5); }
-  .dot.off { background: var(--red); }
-  .state .lbl { font-weight: 700; font-size: 16px; }
-  .state .note { color: var(--muted); font-size: 12.5px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-  .kv { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
-  .kv .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-  .kv .v { font-family: var(--mono); font-size: 13.5px; margin-top: 1px; word-break: break-all; }
-  .kv .v.ok { color: var(--green); }
-  .kv .v.bad { color: var(--red); }
-  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  button {
-    appearance: none; border: 1px solid var(--border); border-radius: 12px;
-    background: var(--card2); color: var(--text); font: 600 14px/1 inherit;
-    padding: 13px 10px; cursor: pointer;
-  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+
+  /* header */
+  h1 { font-size: 20px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 10px;
+       color: var(--on-surface); }
+  h1 .ver { font-size: 11px; font-weight: 600; color: var(--on-surface-variant);
+            background: var(--surface-container-high); padding: 3px 10px; border-radius: 99px; }
+  .sub { color: var(--on-surface-variant); font-size: 12.5px; margin: 4px 0 20px; }
+
+  /* no-KSU banner */
+  .banner { display: none; background: var(--error-container); color: var(--on-error-container);
+            border-radius: 16px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; }
+
+  /* status hero card (Encore Home.vue style) */
+  .hero { background: var(--secondary-container); color: var(--on-secondary-container);
+          border-radius: 24px; padding: 20px; margin-bottom: 16px;
+          display: flex; align-items: center; gap: 16px;
+          transition: background-color .3s ease; }
+  .stIcon { width: 52px; height: 52px; border-radius: 50%; flex: none;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--surface-container-lowest, #18090f);
+            transition: background-color .3s ease, color .3s ease; }
+  .stIcon svg { width: 28px; height: 28px; }
+  .stIcon.on  { color: var(--primary, #ffb0cc); }
+  .stIcon.off { color: var(--error, #f2b8b5); }
+  .heroTxt { flex: 1; min-width: 0; }
+  .heroLbl { font-size: 18px; font-weight: 600; line-height: 1.3; }
+  .heroNote { font-size: 12.5px; opacity: .8; margin-top: 2px; }
+  .chip { font-size: 11px; font-weight: 700; letter-spacing: .06em; flex: none;
+          padding: 4px 12px; border-radius: 99px;
+          background: var(--surface-container-lowest, #18090f); color: var(--on-surface-variant); }
+  .chip.on  { color: var(--primary, #ffb0cc); }
+  .chip.off { color: var(--error, #f2b8b5); }
+
+  /* info card: M3 list rows (icon + label + value) */
+  .card { background: var(--surface-container); color: var(--on-surface);
+          border-radius: 24px; padding: 8px 16px; margin-bottom: 16px; }
+  .row { display: flex; align-items: flex-start; gap: 16px; padding: 13px 2px; }
+  .row + .row { border-top: 1px solid var(--outline-variant); }
+  .row svg { width: 22px; height: 22px; flex: none; margin-top: 2px;
+             color: var(--primary, #ffb0cc); fill: currentColor; }
+  .row .k { font-size: 13.5px; font-weight: 500; }
+  .row .v { font-family: var(--mono); font-size: 12.5px; color: var(--on-surface-variant);
+            margin-top: 2px; word-break: break-all; }
+  .row .v.ok { color: var(--ok, #a6d9a8); }
+
+  /* buttons: filled / tonal / text, M3 shapes + ripple */
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  button { appearance: none; border: none; border-radius: 99px; cursor: pointer;
+           font: 500 14px/1 inherit; padding: 14px 12px; color: var(--on-surface);
+           background: var(--surface-container-high); position: relative; overflow: hidden; }
   button:active { transform: scale(.98); }
-  button:disabled { opacity: .45; pointer-events: none; }
-  button.primary { background: #1d4d8f; border-color: #2a62ad; }
-  button.warn { background: #57302d; border-color: #6d3a36; }
+  button:disabled { opacity: .38; pointer-events: none; }
+  button.filled { background: var(--primary, #ffb0cc); color: var(--on-primary, #541d35); }
+  button.tonalErr { background: var(--error-container, #8c1d18); color: var(--on-error-container, #f9dedc); }
   button.wide { grid-column: 1 / -1; }
-  .log {
-    background: #0b0e11; border: 1px solid var(--border); border-radius: 12px;
-    padding: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.45;
-    white-space: pre-wrap; word-break: break-word; max-height: 340px; overflow-y: auto;
-    color: #b9c4cf;
-  }
-  .log .in { color: var(--accent); }
-  .banner {
-    display: none; background: #3a2f14; border: 1px solid #69531f; color: #ecc978;
-    border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
-  }
-  .spin {
-    display: inline-block; width: 14px; height: 14px; border-radius: 50%;
-    border: 2px solid rgba(255,255,255,.25); border-top-color: #fff;
-    animation: r .8s linear infinite; vertical-align: -2px; margin-right: 6px;
-  }
-  @keyframes r { to { transform: rotate(360deg); } }
-  .foot { color: var(--muted); font-size: 11.5px; text-align: center; margin-top: 4px; }
-  a { color: var(--accent); }
+  .ripple { position: absolute; border-radius: 50%; transform: scale(0); opacity: .6;
+            background: currentColor; pointer-events: none;
+            animation: rip .5s ease-out forwards; }
+  @keyframes rip { to { transform: scale(3); } }
+  @media (prefers-reduced-motion: reduce) { .ripple { animation-duration: .1s !important; } }
+
+  /* log */
+  .log { background: var(--surface-container-lowest, #18090f); border-radius: 24px;
+         padding: 14px; font-family: var(--mono); font-size: 12px; line-height: 1.45;
+         white-space: pre-wrap; word-break: break-word; max-height: 340px; overflow-y: auto;
+         color: var(--on-surface-variant); margin-bottom: 16px; }
+  .log .in { color: var(--primary, #ffb0cc); }
+
+  .spin { display: inline-block; width: 15px; height: 15px; border-radius: 50%;
+          border: 2px solid rgba(255,255,255,.25); border-top-color: currentColor; vertical-align: -2px; margin-right: 7px;
+          animation: rot .8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  .foot { color: var(--on-surface-variant); font-size: 11.5px; text-align: center; margin-top: 4px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>USF CPU Unlock <span class="chip" id="ver">v?</span></h1>
+  <h1>USF CPU Unlock <span class="ver" id="ver">v?</span></h1>
   <p class="sub">Transsion skin-thermal CPU cap &mdash; everything else stays stock</p>
 
   <div class="banner" id="noKsu">
@@ -85,32 +124,49 @@
     (KernelSU / APatch / MMRL) for it to work.
   </div>
 
-  <div class="card">
-    <div class="state">
-      <span class="dot" id="dot"></span>
-      <div>
-        <div class="lbl" id="stateLbl">Checking&hellip;</div>
-        <div class="note" id="stateNote">querying module state</div>
-      </div>
+  <div class="hero" id="hero">
+    <div class="stIcon" id="dot">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>
+      </svg>
     </div>
-    <div class="grid">
-      <div class="kv"><div class="k">Little cluster</div><div class="v" id="p0">&ndash;</div></div>
-      <div class="kv"><div class="k">Big cluster</div><div class="v" id="p4">&ndash;</div></div>
-      <div class="kv"><div class="k">USF engine</div><div class="v" id="engine">&ndash;</div></div>
-      <div class="kv"><div class="k">USF pid</div><div class="v" id="pid">&ndash;</div></div>
+    <div class="heroTxt">
+      <div class="heroLbl" id="stateLbl">Checking&hellip;</div>
+      <div class="heroNote" id="stateNote">querying module state</div>
+    </div>
+    <span class="chip" id="stateChip">&ndash;</span>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M12 5a9 9 0 0 0-9 9h2.5a6.5 6.5 0 1 1 13 0H21a9 9 0 0 0-9-9zm0 5.5A3.5 3.5 0 0 0 8.5 14h7A3.5 3.5 0 0 0 12 10.5z"/></svg>
+      <div><div class="k">Little cluster</div><div class="v" id="p0">&ndash;</div></div>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M9 3h2v2H9zM13 3h2v2h-2zM9 19h2v2H9zM13 19h2v2h-2zM3 9h2v2H3zM19 9h2v2h-2zM3 13h2v2H3zM19 13h2v2h-2zM7 7h10v10H7z"/></svg>
+      <div><div class="k">Big cluster</div><div class="v" id="p4">&ndash;</div></div>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M3 7h11v2H3zM3 15h11v2H3zM17 5h2v6h-2zM17 13h2v6h-2z"/><circle cx="16" cy="6" r="2.4"/><circle cx="16" cy="16" r="2.4"/></svg>
+      <div><div class="k">USF engine</div><div class="v" id="engine">&ndash;</div></div>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M4 17l6-5-6-5v10zM13 17h7v2h-7z"/></svg>
+      <div><div class="k">USF pid</div><div class="v" id="pid">&ndash;</div></div>
     </div>
   </div>
 
   <div class="btns">
-    <button class="primary" id="btnApply">&#9650; Apply</button>
-    <button class="warn" id="btnRestore">&#9632; Restore</button>
+    <button class="filled" id="btnApply">Apply</button>
+    <button class="tonalErr" id="btnRestore">Restore</button>
     <button id="btnRestart">Restart USF</button>
     <button id="btnRefresh">Refresh</button>
-    <button id="btnLog">Show log &#9662;</button>
-    <button id="btnCopy">Copy output</button>
+    <button class="wide" id="btnLog">Show log &#9662;</button>
+    <button class="wide" id="btnCopy">Copy output</button>
   </div>
 
-  <div class="log" id="log" style="display:none"></div>
+  <div class="log" id="log"></div>
   <p class="foot">
     apply = mount patched config + reload USF &middot; restore = stock behavior<br>
     Junction / skin-TJ / charging / GPU policy are never touched
@@ -199,6 +255,23 @@ function setBusy(b, label) {
   }
 }
 
+// Material ripple (Encore Ripple.vue, vanilla port) — no-ops where the
+// environment lacks real event listeners (e.g. test stubs).
+function ripple(el) {
+  if (!el || typeof el.addEventListener !== "function") return;
+  el.addEventListener("pointerdown", function (ev) {
+    var r = el.getBoundingClientRect();
+    var size = Math.max(r.width, r.height);
+    var s = document.createElement("span");
+    s.className = "ripple";
+    s.style.cssText = "width:" + size + "px;height:" + size + "px;opacity:.18" +
+      ";left:" + (ev.clientX - r.left - size / 2) + "px" +
+      ";top:" + (ev.clientY - r.top - size / 2) + "px";
+    el.appendChild(s);
+    setTimeout(function () { if (s && s.remove) s.remove(); }, 550);
+  });
+}
+
 // ---- Commands -------------------------------------------------------------
 function runSh(sub) {
   var cmd = "sh " + MOD + " " + sub;
@@ -238,17 +311,20 @@ function parseStatus(text) {
 
 function render(st) {
   $("ver").textContent = st.version;
-  var dot = $("dot");
+  var dot = $("dot"), chip = $("stateChip");
   if (st.mounted === true) {
-    dot.className = "dot on";
+    dot.className = "stIcon on";
+    chip.className = "chip on"; chip.textContent = "ACTIVE";
     $("stateLbl").textContent = "Patch ACTIVE";
     $("stateNote").textContent = "USF skin-thermal CPU cap is disabled";
   } else if (st.mounted === false) {
-    dot.className = "dot off";
+    dot.className = "stIcon off";
+    chip.className = "chip off"; chip.textContent = "STOCK";
     $("stateLbl").textContent = "Stock behavior";
     $("stateNote").textContent = "USF CPU cap follows skin temperature";
   } else {
-    dot.className = "dot";
+    dot.className = "stIcon";
+    chip.className = "chip"; chip.textContent = "UNKNOWN";
     $("stateLbl").textContent = "Unknown";
     $("stateNote").textContent = "module not found on this install";
   }
@@ -302,6 +378,9 @@ if (!window.ksu || typeof ksu.exec !== "function") {
   $("noKsu").style.display = "block";
   ["btnApply", "btnRestore", "btnRestart"].forEach(function (id) { $(id).disabled = true; });
 }
+
+["btnApply", "btnRestore", "btnRestart", "btnRefresh", "btnLog", "btnCopy"]
+  .forEach(function (id) { ripple($(id)); });
 
 $("btnRefresh").onclick = function () { refresh(); };
 $("btnApply").onclick = function () {

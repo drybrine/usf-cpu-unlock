@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.0 (versionCode 10)
+
+- **Material-3 WebUI redesign** (Encore Tweaks-inspired): status hero card on
+  a secondary-container surface with a circular state icon and ACTIVE/STOCK
+  chip, info card as M3 list rows (icon + label + mono value), pill-shaped
+  filled/tonal buttons with a Material ripple, log panel restyled to the
+  lowest surface container. All M3 color tokens are inlined with Encore's
+  dark-pink defaults and every use reads `var(--token, fallback)` — a
+  Material-You manager can re-theme the page by overriding the CSS variables.
+- Zero functional changes: same ksu.exec bridge (callback + promise
+  fallback), same webui-quick → status two-stage load, same status parsing,
+  all six actions, busy states, hidden-by-default log. The 23-assertion
+  WebUI harness and the 11-test shell suite pass unchanged on the new file.
+
 ## v1.3.0 (versionCode 9)
 
 - **Instant WebUI paint**: the page now loads in two stages. A new
