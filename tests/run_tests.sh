@@ -264,6 +264,13 @@ t_update_json_paths() {
       [ -f "$ROOT/$rel" ] || { bad update-json "changelog 404s: no $rel in repo"; return; }
       ;;
   esac
+  # the root copy exists so cached update.json files (which pointed at
+  # /main/CHANGELOG.md) keep working; it must never drift from the module copy
+  if [ -f "$ROOT/CHANGELOG.md" ]; then
+    cmp -s "$ROOT/CHANGELOG.md" "$MOD/CHANGELOG.md" \
+      || { bad update-json "root CHANGELOG.md drifted from module/CHANGELOG.md"; return; }
+  fi
+
   # zipUrl must name the same version as the release
   zip=$(sed -n 's/.*"zipUrl": "\([^"]*\)".*/\1/p' "$uj")
   case "$zip" in
