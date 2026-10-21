@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.0.0 (versionCode 20)
+
+**Encore Tweaks merged in.** The module no longer just removes the USF CPU
+cap — it now carries Encore's tweak set, so the unlocked clocks actually get
+*used* instead of idling at a conservative governor.
+
+- **Performance profiles** (ported from Encore, Apache-2.0):
+  `performance` / `performance_lite` / `balance` / `powersave` /
+  `perfcommon`. Covers MediaTek PPM limits and policy_status, FPSGO, DDR
+  boost + dvfsrc, GED KPI, GPU OPP/power-limiter, Mali power policy,
+  battery-OC throttle, eara thermal, plus Snapdragon / Exynos / Unisoc /
+  Tensor branches.
+- **perfcommon** runs with every boost: I/O (iostats, add_random,
+  read_ahead, nr_requests), TCP congestion control (bbr3 → cubic fallback),
+  TCP low-latency/ECN/fastopen, scheduler latency knobs, VM tuning, and
+  `sched_lib_name` so game engines see the full CPU capability.
+- **Auto game watcher** (replaces Encore's `encored` daemon, plain sh so it
+  works under GhostLock): polls the foreground package, applies
+  `performance` while a listed game is on screen, `balance` otherwise,
+  `powersave` when the screen is off. State-file driven, so it never
+  re-applies the same profile twice.
+- **Game list** management: `games add|remove|list` plus an inline field in
+  the WebUI. Seeded empty on install.
+- **WebUI**: new performance card — segmented profile picker, watcher switch,
+  game-list count and add field. Still no Apply button; the USF patch keeps
+  applying itself.
+- The profiler is opt-out (`disable-profiler` in the module dir) and the
+  watcher can be turned off from the WebUI or `watch off`.
+
+Thermal safety is unchanged: only the USF skin-thermal *CPU cluster cap* is
+removed. Kernel junction protection, trip points, skin-control TJ targets and
+battery/charging policy stay stock.
+
 ## v1.5.0 (versionCode 11)
 
 - **Fully automatic apply — the Apply button is gone.** The patch now mounts

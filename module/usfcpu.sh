@@ -17,6 +17,8 @@
 # skin-control TJ targets, charging policy, GPU/brightness/FP policy.
 #
 # Commands: apply | restore | status | toggle | restart-usf
+#           profile <name> | profile-status | watch <on|off|status>
+#           games <add|remove|list> [package]
 
 case "$0" in
   */*) MODDIR=${0%/*} ;;
@@ -38,6 +40,11 @@ PATCHED_DIR="$MODDIR/patched"
 BACKUP="$BACKUP_DIR/tran_thermal.xml"
 PATCHED="$PATCHED_DIR/tran_thermal.xml"
 LOG="$MODDIR/apply.log"
+
+CONFIG_DIR=${USF_CONFIG_DIR:-/data/adb/.config/usf-cpu-unlock}
+GAMELIST="$CONFIG_DIR/gamelist.txt"
+WATCHER="$MODDIR/scripts/usf_watcher.sh"
+PROFILER="$MODDIR/scripts/usf_profiler.sh"
 
 run_awk() {
   if [ -n "$KSU_BB" ]; then "$KSU_BB" awk "$@"; else awk "$@"; fi
@@ -327,6 +334,126 @@ do_changelog() {
   fi
 }
 
+# --- performance profiles (ported from Encore Tweaks) ----------------------
+
+do_profile() {
+  p=${1:-}
+  case "$p" in
+    performance|performance_lite|balance|powersave|perfcommon) ;;
+    *) ui "usage: $0 profile {performance|performance_lite|balance|powersave}"; return 2 ;;
+  esac
+  if [ ! -f "$PROFILER" ]; then
+    ui "ERROR: profiler script missing ($PROFILER)"
+    return 1
+  fi
+  sh "$PROFILER" "$p" >/dev/null 2>&1
+  mkdir -p "$CONFIG_DIR" 2>/dev/null
+  printf '%s\n' "$p" > "$CONFIG_DIR/manual_profile" 2>/dev/null
+  ui "profile applied: $p"
+  print_freqs
+}
+
+do_profile_status() {
+  cur=$(cat "$CONFIG_DIR/watcher.state" 2>/dev/null)
+  man=$(cat "$CONFIG_DIR/manual_profile" 2>/dev/null)
+  if [ -f "$CONFIG_DIR/watcher.disabled" ]; then
+    wstate=off
+  else
+    wpid=$(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null)
+    if [ -n "$wpid" ] && [ -d "/proc/$wpid" ]; then wstate="on (pid $wpid)"; else wstate="on (not running)"; fi
+  fi
+  ui "watcher     : $wstate"
+  ui "profile     : ${cur:-unknown (watcher has not run yet)}"
+  [ -n "$man" ] && ui "manual pick : $man"
+  n=0
+  [ -r "$GAMELIST" ] && n=$(grep -cvE '^[[:space:]]*(#|$)' "$GAMELIST" 2>/dev/null)
+  ui "gamelist    : ${n:-0} package(s) -> $GAMELIST"
+  ui "cpufreq caps (max vs hardware max):"
+  print_freqs
+}
+
+do_watch() {
+  case "${1:-status}" in
+    on|enable)
+      rm -f "$CONFIG_DIR/watcher.disabled" 2>/dev/null
+      mkdir -p "$CONFIG_DIR" 2>/dev/null
+      if [ ! -f "$WATCHER" ]; then
+        ui "ERROR: watcher script missing ($WATCHER)"; return 1
+      fi
+      if [ -n "${USF_NO_SPAWN:-}" ]; then
+        ui "watcher enabled (not spawned)"
+        return 0
+      fi
+      old=$(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null)
+      if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+        case "$(tr -d '\0' < "/proc/$old/cmdline" 2>/dev/null)" in
+          *usf_watcher*) ui "watcher already running (pid $old)"; return 0 ;;
+        esac
+      fi
+      MODULE_DIR="$MODDIR" nohup sh "$WATCHER" >> "$MODDIR/watcher.log" 2>&1 &
+      sleep 1
+      ui "watcher started (pid $(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null))"
+      ;;
+    off|disable)
+      mkdir -p "$CONFIG_DIR" 2>/dev/null
+      : > "$CONFIG_DIR/watcher.disabled"
+      old=$(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null)
+      if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+        case "$(tr -d '\0' < "/proc/$old/cmdline" 2>/dev/null)" in
+          *usf_watcher*) kill "$old" 2>/dev/null ;;
+        esac
+      fi
+      rm -f "$CONFIG_DIR/watcher.pid" 2>/dev/null
+      ui "watcher disabled (profile stays at $(cat "$CONFIG_DIR/watcher.state" 2>/dev/null || echo unknown))"
+      ;;
+    status)
+      do_profile_status
+      ;;
+    *)
+      ui "usage: $0 watch {on|off|status}"; return 2 ;;
+  esac
+}
+
+do_games() {
+  mkdir -p "$CONFIG_DIR" 2>/dev/null
+  [ -f "$GAMELIST" ] || : > "$GAMELIST"
+  case "${1:-list}" in
+    add)
+      pkg=${2:-}
+      if [ -z "$pkg" ]; then ui "usage: $0 games add <package>"; return 2; fi
+      if grep -qxF "$pkg" "$GAMELIST" 2>/dev/null; then
+        ui "$pkg already in the gamelist"
+        return 0
+      fi
+      printf '%s\n' "$pkg" >> "$GAMELIST"
+      ui "added: $pkg"
+      ;;
+    remove|rm)
+      pkg=${2:-}
+      if [ -z "$pkg" ]; then ui "usage: $0 games remove <package>"; return 2; fi
+      if ! grep -qxF "$pkg" "$GAMELIST" 2>/dev/null; then
+        ui "$pkg is not in the gamelist"
+        return 0
+      fi
+      tmp="$GAMELIST.tmp.$$"
+      grep -vxF "$pkg" "$GAMELIST" > "$tmp" 2>/dev/null
+      mv -f "$tmp" "$GAMELIST" 2>/dev/null
+      ui "removed: $pkg"
+      ;;
+    list)
+      n=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        ui "$line"
+        n=$((n + 1))
+      done < "$GAMELIST"
+      ui "($n package(s))"
+      ;;
+    *)
+      ui "usage: $0 games {add|remove|list} [package]"; return 2 ;;
+  esac
+}
+
 # Dispatch only when executed directly. Callers that source this file as a
 # library (action.sh / service.sh / uninstall.sh) invoke do_* functions
 # themselves; "$0" there is the caller's path, not this script's.
@@ -338,12 +465,19 @@ case "$0" in
   status)       do_status ;;
   webui-quick)  do_quick ;;
   changelog)    do_changelog ;;
+  profile)      do_profile "${2:-}" ;;
+  profile-status) do_profile_status ;;
+  watch)        do_watch "${2:-status}" ;;
+  games)        do_games "${2:-list}" "${3:-}" ;;
   toggle)
     if [ -n "$SRC" ] && is_mounted "$SRC"; then do_restore; else do_apply; fi
     ;;
   restart-usf)  restart_usf ;;
   *)
     ui "usage: $0 {apply|restore|status|webui-quick|toggle|changelog|restart-usf}"
+    ui "       $0 profile {performance|performance_lite|balance|powersave}"
+    ui "       $0 profile-status | watch {on|off|status}"
+    ui "       $0 games {add|remove|list} [package]"
     ui "action.sh/service.sh/uninstall.sh source this file as a library."
     exit 2
     ;;

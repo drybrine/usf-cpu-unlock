@@ -14,11 +14,14 @@ ui_print "***********************************"
 ui_print " usf-cpu-unlock"
 ui_print "***********************************"
 ui_print "Disables ONLY the Transsion USF"
-ui_print "skin-thermal CPU cluster cap."
+ui_print "skin-thermal CPU cluster cap,"
+ui_print "plus Encore-style performance"
+ui_print "profiles with an auto game watcher."
 ui_print " - original tran_thermal.xml untouched"
 ui_print " - runtime bind mount + USF reload"
 ui_print " - fully reversible (restore/uninstall)"
 ui_print " - junction/skin TJ protection kept"
+ui_print " - game detected -> max clocks automatically"
 ui_print ""
 
 if [ ! -f /tr_product/etc/vconfig/tranusf/config/thermal/tran_thermal.xml ] \
@@ -67,6 +70,22 @@ fi
 ui_print ""
 ui_print "Verify afterwards:"
 ui_print "  su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh status'"
+ui_print ""
+
+# Profiler config: seed the gamelist so the watcher has something to read.
+CONFIG_DIR=/data/adb/.config/usf-cpu-unlock
+mkdir -p "$CONFIG_DIR" 2>/dev/null
+if [ ! -f "$CONFIG_DIR/gamelist.txt" ]; then
+  cat > "$CONFIG_DIR/gamelist.txt" <<'GAMELIST'
+# One package per line. The watcher switches to the performance profile
+# while one of these is in the foreground, and back to balance otherwise.
+# Add entries from the WebUI, or:
+#   su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games add <package>'
+GAMELIST
+fi
+ui_print "Profiler: game watcher enabled (balance by default)."
+ui_print "Add your games:"
+ui_print "  su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games add com.example.game'"
 ui_print ""
 ui_print "Kernel/junction thermal protection is NOT disabled."
 ui_print "The device can run hotter under sustained load -"

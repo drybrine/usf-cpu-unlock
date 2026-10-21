@@ -26,6 +26,48 @@ skin-control target TJ, kebijakan charging, GPU, brightness, FPS.
 dengan melepas bind mount (file asli memang tidak pernah diubah), backup
 tersedia untuk perbandingan/pemulihan manual.
 
+## Profil performa (port dari Encore)
+
+Mematikan cap cuma menaikkan plafon — governor tetap harus naik ke sana.
+Profiler bawaan (`scripts/usf_profiler.sh`, adaptasi dari
+[Encore Tweaks](https://github.com/Rem01Gaming/encore), Apache-2.0) yang
+mengurusnya:
+
+| Profil | Efek |
+|---|---|
+| `performance` | Governor `performance`, PPM min/max dikunci ke max hardware, FPSGO mati, DDR boost nyala, GPU fix OPP max, throttle battery-OC stop, eara thermal mati |
+| `performance_lite` | Sama, tapi pin ke OPP tengah — lebih adem & efisien buat game ringan |
+| `balance` | Governor stok, limit PPM dilepas, FPSGO balik 2, eara thermal nyala lagi |
+| `powersave` | Balance + battery saver + GPU OPP minimum |
+| `perfcommon` | Jalan tiap boost: I/O, TCP (bbr3 → cubic), knob latency scheduler/VM, `sched_lib_name` buat engine game |
+
+Jalur MediaTek yang utama (PPM, `policy_status`, `gpufreqv2`,
+`mtk-dvfsrc`, GED, `eara_thermal`); cabang Snapdragon / Exynos / Unisoc /
+Tensor ikut dari Encore, dipilih lewat deteksi SoC.
+
+### Auto game watcher
+
+`scripts/usf_watcher.sh` gantiin daemon `encored` Encore pakai sh biasa, jadi
+tetap jalan di root sementara GhostLock:
+
+- polling package foreground (cpuset top-app + `oom_score_adj`, tanpa dumpsys
+  di jalur panas)
+- game ada di list → `performance`; selain itu → `balance`; layar mati →
+  `powersave`
+- berbasis state file, jadi profil yang sama tidak diterapkan dua kali
+
+```sh
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games add com.mobile.legends'
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh games list'
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh profile performance'
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh watch off'
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh profile-status'
+```
+
+Config di `/data/adb/.config/usf-cpu-unlock` (`gamelist.txt`,
+`watcher.state`, `watcher.disabled`, `watcher.interval`). Matikan profiler
+total dengan file `disable-profiler` di direktori module.
+
 ## Yang TIDAK diubah
 - Tidak menulis ke partisi manapun.
 - Tidak mengubah `persist.*` property.

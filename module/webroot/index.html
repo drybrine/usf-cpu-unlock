@@ -105,6 +105,26 @@
          color: var(--on-surface-variant); margin-bottom: 16px; }
   .log .in { color: var(--primary, #ffb0cc); }
 
+  /* performance card: segmented profile picker + watcher switch */
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 4px 2px 14px; }
+  .seg button { padding: 11px 4px; font-size: 12px; font-weight: 500;
+                background: var(--surface-container-high); color: var(--on-surface-variant); }
+  .seg button.sel { background: var(--primary, #ffb0cc); color: var(--on-primary, #541d35); font-weight: 700; }
+  .switch { width: 48px; height: 28px; border-radius: 99px; flex: none; position: relative;
+            background: var(--surface-container-highest); cursor: pointer;
+            transition: background-color .2s ease; }
+  .switch.on { background: var(--primary, #ffb0cc); }
+  .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px;
+                   border-radius: 50%; background: var(--on-surface-variant);
+                   transition: transform .2s ease, background-color .2s ease; }
+  .switch.on::after { transform: translateX(20px); background: var(--on-primary, #541d35); }
+  .glinput { display: flex; gap: 8px; padding: 2px 2px 12px; }
+  .glinput input { flex: 1; min-width: 0; background: var(--surface-container-high);
+                   color: var(--on-surface); border: 1px solid var(--outline-variant);
+                   border-radius: 14px; padding: 12px; font: 13px/1 var(--mono); }
+  .glinput input::placeholder { color: var(--on-surface-variant); opacity: .7; }
+  .glinput button { padding: 12px 18px; font-size: 13px; }
+
   .spin { display: inline-block; width: 15px; height: 15px; border-radius: 50%;
           border: 2px solid rgba(255,255,255,.25); border-top-color: currentColor; vertical-align: -2px; margin-right: 7px;
           animation: rot .8s linear infinite; }
@@ -151,6 +171,43 @@
     <div class="row">
       <svg viewBox="0 0 24 24"><path d="M4 17l6-5-6-5v10zM13 17h7v2h-7z"/></svg>
       <div><div class="k">USF pid</div><div class="v" id="pid">&ndash;</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11L9.5 22 19 10h-6.5z"/></svg>
+      <div style="flex:1">
+        <div class="k">Performance profile</div>
+        <div class="v" id="profTxt">&ndash;</div>
+      </div>
+      <span class="chip" id="profChip">&ndash;</span>
+    </div>
+    <div class="seg" id="seg">
+      <button data-p="performance">Max</button>
+      <button data-p="performance_lite">Lite</button>
+      <button data-p="balance">Balance</button>
+      <button data-p="powersave">Saver</button>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+      <div style="flex:1">
+        <div class="k">Auto game watcher</div>
+        <div class="v" id="watchTxt">&ndash;</div>
+      </div>
+      <div class="switch" id="watchSw" role="switch" aria-checked="false" tabindex="0"></div>
+    </div>
+    <div class="row">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
+      <div style="flex:1">
+        <div class="k">Game list</div>
+        <div class="v" id="glTxt">&ndash;</div>
+      </div>
+    </div>
+    <div class="glinput">
+      <input id="glInput" placeholder="com.package.name" autocapitalize="none"
+             autocorrect="off" spellcheck="false" autocomplete="off">
+      <button id="btnGlAdd">Add</button>
     </div>
   </div>
 
@@ -281,7 +338,8 @@ function runSh(sub) {
 function parseStatus(text) {
   var st = {
     version: "?", mounted: null, pid: "\u2013",
-    p0: null, p4: null, engine: "\u2013"
+    p0: null, p4: null, engine: "\u2013",
+    prof: null, watch: null, watchPid: null, games: null
   };
   for (var m, re, i = 0, lines = text.split("\n"); i < lines.length; i++) {
     var l = lines[i];
@@ -297,6 +355,13 @@ function parseStatus(text) {
     if ((m = l.match(/clusterCpu0=(\d+)/)) && m[1] === "0" && st.engine !== "\u2013") {
       st.engine += " \u00b7 no CPU cap";
     }
+    // profile-status section
+    if ((m = l.match(/^watcher\s+:\s*(on|off)\b(.*)$/))) {
+      st.watch = (m[1] === "on");
+      st.watchPid = (m[2].match(/pid (\d+)/) || [])[1] || null;
+    }
+    if ((m = l.match(/^profile\s+:\s*(\S+)/))) st.prof = m[1];
+    if ((m = l.match(/^gamelist\s+:\s*(\d+)/))) st.games = parseInt(m[1], 10);
   }
   return st;
 }
@@ -329,6 +394,38 @@ function render(st) {
   p4.textContent = polHtml(st.p4); p4.className = "v" + (st.p4 && st.p4.free ? " ok" : "");
   $("engine").textContent = st.engine;
   $("pid").textContent = st.pid;
+
+  // performance card
+  var names = { performance: "Max performance", performance_lite: "Max (lite)",
+                balance: "Balanced", powersave: "Battery saver" };
+  var prof = $("profTxt"), pchip = $("profChip");
+  if (st.prof && st.prof !== "unknown") {
+    prof.textContent = names[st.prof] || st.prof;
+    prof.className = "v";
+    pchip.className = "chip" + (st.prof === "performance" || st.prof === "performance_lite" ? " on" : "");
+    pchip.textContent = (st.prof === "performance" || st.prof === "performance_lite") ? "BOOST" : "NORMAL";
+  } else {
+    prof.textContent = "\u2013";
+    pchip.className = "chip"; pchip.textContent = "\u2013";
+  }
+  var seg = $("seg").getElementsByTagName("button");
+  for (var i = 0; i < seg.length; i++) {
+    seg[i].className = (seg[i].getAttribute("data-p") === st.prof) ? "sel" : "";
+  }
+  var sw = $("watchSw"), wtxt = $("watchTxt");
+  if (st.watch === true) {
+    sw.className = "switch on"; sw.setAttribute("aria-checked", "true");
+    wtxt.textContent = st.watchPid ? "running \u00b7 pid " + st.watchPid
+                                   : "enabled \u00b7 not running yet";
+  } else if (st.watch === false) {
+    sw.className = "switch"; sw.setAttribute("aria-checked", "false");
+    wtxt.textContent = "off \u2014 profile stays where you put it";
+  } else {
+    sw.className = "switch"; sw.setAttribute("aria-checked", "false");
+    wtxt.textContent = "\u2013";
+  }
+  $("glTxt").textContent = (st.games === null) ? "\u2013"
+    : st.games + " package" + (st.games === 1 ? "" : "s") + " \u00b7 auto-boost on launch";
 }
 
 function refresh() {
@@ -340,9 +437,16 @@ function refresh() {
   return runSh("webui-quick").then(function (r) {
     render(parseStatus(r.stdout || ""));
     setBusy(false);
-    return runSh("status").then(function (r2) {
-      if (!busy) render(parseStatus(r2.stdout || ""));
-    }).catch(function () {});
+    // profile-status is sysfs/state-file only (no dumpsys) — fetch it
+    // alongside the engine dump so both land together.
+    return Promise.all([
+      runSh("status").catch(function () { return null; }),
+      runSh("profile-status").catch(function () { return null; })
+    ]).then(function (res) {
+      if (busy) return;
+      var text = ((res[0] && res[0].stdout) || "") + "\n" + ((res[1] && res[1].stdout) || "");
+      render(parseStatus(text));
+    });
   }).catch(function () {
     $("stateLbl").textContent = "Error";
     $("stateNote").textContent = "could not run usfcpu.sh";
@@ -368,7 +472,11 @@ function action(sub, label, doneMsg) {
 // ---- Wiring ----------------------------------------------------------------
 if (!window.ksu || typeof ksu.exec !== "function") {
   $("noKsu").style.display = "block";
-  ["btnRestore", "btnRestart"].forEach(function (id) { $(id).disabled = true; });
+  ["btnRestore", "btnRestart", "btnGlAdd"].forEach(function (id) { $(id).disabled = true; });
+  var segs = $("seg").getElementsByTagName("button");
+  for (var i = 0; i < segs.length; i++) segs[i].disabled = true;
+  $("watchSw").style.opacity = ".4";
+  $("watchSw").style.pointerEvents = "none";
 }
 
 ["btnRestore", "btnRestart", "btnRefresh", "btnLog", "btnCopy"]
@@ -404,6 +512,43 @@ $("btnCopy").onclick = function () {
     toast("Clipboard unavailable");
   }
 };
+
+// ---- Performance card wiring ----------------------------------------------
+(function () {
+  var seg = $("seg").getElementsByTagName("button");
+  for (var i = 0; i < seg.length; i++) {
+    ripple(seg[i]);
+    seg[i].onclick = function () {
+      var p = this.getAttribute("data-p");
+      if (!p) return;
+      action("profile " + p, "Applying " + p + "\u2026", "Profile: " + p);
+    };
+  }
+  var sw = $("watchSw");
+  function toggleWatch() {
+    var turningOn = sw.className.indexOf("on") === -1;
+    action("watch " + (turningOn ? "on" : "off"),
+           turningOn ? "Starting watcher\u2026" : "Stopping watcher\u2026",
+           turningOn ? "Auto game watcher on" : "Auto game watcher off");
+  }
+  sw.onclick = toggleWatch;
+  sw.onkeydown = function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWatch(); }
+  };
+  var addBtn = $("btnGlAdd"), input = $("glInput");
+  ripple(addBtn);
+  function addGame() {
+    var pkg = (input.value || "").trim();
+    if (!pkg) { toast("Enter a package name"); return; }
+    if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(pkg)) {
+      toast("Not a valid package name"); return;
+    }
+    action("games add " + pkg, "Adding\u2026", pkg + " added");
+    input.value = "";
+  }
+  addBtn.onclick = addGame;
+  input.onkeydown = function (e) { if (e.key === "Enter") addGame(); };
+})();
 
 refresh();
 </script>

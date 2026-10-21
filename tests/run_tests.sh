@@ -109,6 +109,74 @@ t_apostrophe_value() {
   ok apostrophe-value
 }
 
+
+# --- CLI surface: profiles / watcher / gamelist ---------------------------
+cli() { # cli <args...> — run usfcpu.sh with an isolated config dir
+  USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 sh "$MOD/usfcpu.sh" "$@" 2>&1
+}
+
+t_cli_usage() {
+  out=$(cli bogus-subcommand); rc=$?
+  [ "$rc" -eq 2 ] || { bad cli-usage "exit $rc, expected 2"; return; }
+  echo "$out" | grep -q 'usage:' || { bad cli-usage "no usage text"; return; }
+  echo "$out" | grep -q 'profile {' || { bad cli-usage "profile usage line missing"; return; }
+  echo "$out" | grep -q 'games {' || { bad cli-usage "games usage line missing"; return; }
+  ok cli-usage
+}
+
+t_cli_games() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  out=$(cli games add com.mobile.legends)
+  echo "$out" | grep -q 'added: com.mobile.legends' || { bad cli-games "add not confirmed"; return; }
+  grep -qxF 'com.mobile.legends' "$TMP/cfg/gamelist.txt" || { bad cli-games "package not written"; return; }
+
+  # idempotent
+  cli games add com.mobile.legends >/dev/null
+  n=$(grep -cxF 'com.mobile.legends' "$TMP/cfg/gamelist.txt")
+  [ "$n" -eq 1 ] || { bad cli-games "duplicate entry ($n lines)"; return; }
+
+  cli games add com.garena.game.codm >/dev/null
+  out=$(cli games list)
+  echo "$out" | grep -q 'com.mobile.legends' || { bad cli-games "list missing entry"; return; }
+  echo "$out" | grep -q '(2 package(s))' || { bad cli-games "list count wrong: $out"; return; }
+
+  out=$(cli games remove com.mobile.legends)
+  echo "$out" | grep -q 'removed: com.mobile.legends' || { bad cli-games "remove not confirmed"; return; }
+  grep -qxF 'com.mobile.legends' "$TMP/cfg/gamelist.txt" && { bad cli-games "entry survived removal"; return; }
+  grep -qxF 'com.garena.game.codm' "$TMP/cfg/gamelist.txt" || { bad cli-games "removal dropped a sibling"; return; }
+  ok cli-games
+}
+
+t_cli_watch_toggle() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  out=$(cli watch off)
+  echo "$out" | grep -q 'watcher disabled' || { bad cli-watch "off not confirmed: $out"; return; }
+  [ -f "$TMP/cfg/watcher.disabled" ] || { bad cli-watch "disabled marker not created"; return; }
+
+  out=$(cli watch on)
+  echo "$out" | grep -q 'watcher enabled' || { bad cli-watch "on not confirmed: $out"; return; }
+  [ -f "$TMP/cfg/watcher.disabled" ] && { bad cli-watch "disabled marker survived"; return; }
+  ok cli-watch-toggle
+}
+
+t_cli_profile_status() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  printf 'performance\n' > "$TMP/cfg/watcher.state"
+  printf 'com.mobile.legends\ncom.garena.game.codm\n' > "$TMP/cfg/gamelist.txt"
+  out=$(cli profile-status)
+  echo "$out" | grep -q 'watcher     : on' || { bad cli-pstatus "watcher line missing: $out"; return; }
+  echo "$out" | grep -q 'profile     : performance' || { bad cli-pstatus "profile line missing"; return; }
+  echo "$out" | grep -q 'gamelist    : 2 package' || { bad cli-pstatus "gamelist count wrong"; return; }
+  ok cli-profile-status
+}
+
+t_cli_profile_bad() {
+  out=$(cli profile turbo); rc=$?
+  [ "$rc" -eq 2 ] || { bad cli-profile "exit $rc, expected 2"; return; }
+  echo "$out" | grep -q 'usage: ' || { bad cli-profile "no usage"; return; }
+  ok cli-profile-bad
+}
+
 t_pretty
 t_minified
 t_partial
@@ -119,6 +187,11 @@ t_verifier_catches_leftover
 t_decoy_names
 t_gt_in_value
 t_apostrophe_value
+t_cli_usage
+t_cli_games
+t_cli_watch_toggle
+t_cli_profile_status
+t_cli_profile_bad
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

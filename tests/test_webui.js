@@ -22,10 +22,14 @@ const script = m[1];
 function makeEl() {
   return {
     textContent: "", innerHTML: "", className: "", disabled: false,
-    style: {}, onclick: null,
-    children: [],
+    style: {}, onclick: null, onkeydown: null,
+    children: [], kids: [], attrs: {},
     // mirror real DOM behavior: appending a child contributes its text
     appendChild(c) { this.children.push(c); this.textContent += c.textContent; },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+    // enough of the HTMLCollection contract for the page's loops
+    getElementsByTagName() { return this.kids; },
     scrollTop: 0, scrollHeight: 0
   };
 }
@@ -34,6 +38,13 @@ const document = {
   getElementById(id) { return els[id] || (els[id] = makeEl()); },
   createElement() { return makeEl(); }
 };
+// static markup the script queries by collection: the profile segmented row
+els.seg = makeEl();
+["performance", "performance_lite", "balance", "powersave"].forEach(p => {
+  const b = makeEl();
+  b.setAttribute("data-p", p);
+  els.seg.kids.push(b);
+});
 
 // --- samples: quick (sysfs-only) and full status -----------------------------
 const QUICK_ACTIVE = [
@@ -86,8 +97,27 @@ const FULL_STOCK = [
   "  policy4: max=2200000 hw=2600000"
 ].join("\n");
 
+const PROFILE_GAMING = [
+  "watcher     : on (pid 4242)",
+  "profile     : performance",
+  "gamelist    : 2 package(s) -> /data/adb/.config/usf-cpu-unlock/gamelist.txt",
+  "cpufreq caps (max vs hardware max):",
+  "  policy0: max=2000000 hw=2000000",
+  "  policy4: max=2600000 hw=2600000"
+].join("\n");
+
+const PROFILE_IDLE = [
+  "watcher     : off",
+  "profile     : balance",
+  "gamelist    : 0 package(s) -> /data/adb/.config/usf-cpu-unlock/gamelist.txt",
+  "cpufreq caps (max vs hardware max):",
+  "  policy0: max=1800000 hw=2000000",
+  "  policy4: max=2200000 hw=2600000"
+].join("\n");
+
 let fullSample = FULL_ACTIVE;
 let quickSample = QUICK_ACTIVE;
+let profileSample = PROFILE_GAMING;
 const execCalls = [];
 const toasts = [];
 
@@ -98,7 +128,8 @@ const ksu = {
     execCalls.push(cmd);
     if (typeof optionsJson !== "string") throw new Error("options must be a JSON string");
     const quick = cmd.indexOf("webui-quick") !== -1;
-    const out = quick ? quickSample : fullSample;
+    const prof = cmd.indexOf("profile-status") !== -1;
+    const out = quick ? quickSample : (prof ? profileSample : fullSample);
     setTimeout(() => {
       const cb = globalThis[callbackName];
       if (typeof cb === "function") cb(0, out, "");
@@ -144,6 +175,49 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("full: pid filled", els.pid.textContent === "18354");
   check("log collected while hidden", els.log.textContent.indexOf("patch mount: ACTIVE") !== -1);
 
+  // --- performance card ------------------------------------------------------
+  check("profile-status issued in background", execCalls.some(c => /profile-status/.test(c)));
+  check("profile: label from watcher state", els.profTxt.textContent === "Max performance");
+  check("profile: chip reads BOOST", els.profChip.textContent === "BOOST" && /(^|\s)on(\s|$)/.test(els.profChip.className));
+  check("profile: matching segment selected",
+        els.seg.kids.filter(b => b.className === "sel").length === 1 &&
+        els.seg.kids[0].className === "sel");
+  check("watcher: switch on", /(^|\s)on(\s|$)/.test(els.watchSw.className));
+  check("watcher: pid reported", els.watchTxt.textContent.indexOf("pid 4242") !== -1);
+  check("watcher: aria-checked true", els.watchSw.getAttribute("aria-checked") === "true");
+  check("gamelist: count rendered", els.glTxt.textContent.indexOf("2 packages") === 0);
+
+  // profile tap -> usfcpu.sh profile <name>
+  const beforeCalls = execCalls.length;
+  els.seg.kids[2].onclick.call(els.seg.kids[2]); // balance
+  await sleep(90);
+  check("profile tap runs 'profile balance'",
+        execCalls.slice(beforeCalls).some(c => /usfcpu\.sh profile balance/.test(c)));
+
+  // watcher switch tap -> watch off (switch was on)
+  const beforeWatch = execCalls.length;
+  els.watchSw.onclick();
+  await sleep(90);
+  check("watcher tap runs 'watch off'",
+        execCalls.slice(beforeWatch).some(c => /usfcpu\.sh watch off/.test(c)));
+
+  // gamelist add: valid package runs the CLI, invalid is rejected locally
+  const beforeAdd = execCalls.length;
+  els.glInput.value = "com.mobile.legends";
+  els.btnGlAdd.onclick();
+  await sleep(90);
+  check("gamelist add runs 'games add'",
+        execCalls.slice(beforeAdd).some(c => /usfcpu\.sh games add com\.mobile\.legends/.test(c)));
+  check("gamelist add clears the field", els.glInput.value === "");
+
+  const beforeBad = execCalls.length;
+  const toastsBefore = toasts.length;
+  els.glInput.value = "not a package";
+  els.btnGlAdd.onclick();
+  await sleep(30);
+  check("gamelist rejects an invalid package locally",
+        execCalls.length === beforeBad && toasts.length === toastsBefore + 1);
+
   // --- log toggle ------------------------------------------------------------
   els.btnLog.onclick();
   check("toggle: log shown", els.log.style.display === "block");
@@ -155,6 +229,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   // --- stock sample ----------------------------------------------------------
   fullSample = FULL_STOCK;
   quickSample = QUICK_STOCK;
+  profileSample = PROFILE_IDLE;
   els.ver.textContent = ""; els.stateLbl.textContent = ""; els.p0.textContent = "";
   els.p4.textContent = ""; els.engine.textContent = ""; els.pid.textContent = "";
 
@@ -166,6 +241,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("stock full: little capped", els.p0.textContent.indexOf("1.80") !== -1 && els.p0.textContent.indexOf("\u2713") === -1);
   check("stock full: big capped", els.p4.textContent.indexOf("2.20") !== -1 && els.p4.textContent.indexOf("\u2713") === -1);
   check("stock full: engine level 41 without no-cap", els.engine.textContent.indexOf("level 41") !== -1 && els.engine.textContent.indexOf("no CPU cap") === -1);
+  check("stock: watcher switch off", !/(^|\s)on(\s|$)/.test(els.watchSw.className));
+  check("stock: profile chip NORMAL", els.profChip.textContent === "NORMAL");
+  check("stock: balance segment selected",
+        els.seg.kids.filter(b => b.className === "sel").length === 1 &&
+        els.seg.kids[2].className === "sel");
 
   console.log(failures === 0 ? "\nwebui tests: all passed" : "\nwebui tests: " + failures + " FAILED");
   process.exit(failures === 0 ? 0 : 1);
