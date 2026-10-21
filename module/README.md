@@ -120,9 +120,11 @@ APatch / MMRL). Aksi **Restore / Restart USF** sekali tap, kartu status live
 (status patch, ceiling tiap cluster vs max hardware, level engine, pid USF),
 dan log command yang bisa di-copy (tersembunyi di balik tombol toggle).
 Tidak ada tombol Apply — patch terpasang otomatis saat install dan setiap
-module dimuat. Kartu tergambar instan dari quick status khusus-sysfs; detail
-engine (dumpsys) menyusul di belakang tanpa memblokir. Satu file
-`webroot/index.html` mandiri — tanpa bundler, tanpa akses jaringan.
+module dimuat. Satu refresh = satu panggilan bridge (`webui-fast`, cuma sysfs + state file)
+dan satu tap langsung menggambar ulang dari output aksinya sendiri — dua-duanya
+selesai ~120 ms. Detail engine (dumpsys) di-cache dan menyusul di belakang
+tanpa memblokir. Satu file `webroot/index.html` mandiri — tanpa bundler, tanpa
+akses jaringan.
 
 Riwayat versi tersimpan di dalam module:
 

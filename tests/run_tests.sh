@@ -115,7 +115,6 @@ cli() { # cli <args...> — run usfcpu.sh with an isolated config dir
   USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 sh "$MOD/usfcpu.sh" "$@" 2>&1
 }
 
-t_update_json_paths
 t_cli_usage() {
   out=$(cli bogus-subcommand); rc=$?
   [ "$rc" -eq 2 ] || { bad cli-usage "exit $rc, expected 2"; return; }
@@ -242,6 +241,57 @@ t_cli_profile_bad() {
   ok cli-profile-bad
 }
 
+t_webui_fast() {
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  printf 'performance\n' > "$TMP/cfg/watcher.state"
+  printf 'keep\n' > "$TMP/cfg/watcher.screen_off"
+  printf 'com.mobile.legends\n# c\n\ncom.garena.game.codm\n' > "$TMP/cfg/gamelist.txt"
+
+  # dumpsys stub: webui-fast must never touch it (it is the slow path)
+  mkdir -p "$TMP/nodump"
+  printf '#!/bin/sh\necho called >> "$DUMPLOG"\nexit 0\n' > "$TMP/nodump/dumpsys"
+  chmod +x "$TMP/nodump/dumpsys"
+  export DUMPLOG="$TMP/dump.log"; : > "$DUMPLOG"
+
+  out=$(PATH="$TMP/nodump:$PATH" USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 \
+        sh "$MOD/usfcpu.sh" webui-fast 2>&1)
+  [ -s "$DUMPLOG" ] && { bad webui-fast "called dumpsys (slow path)"; return; }
+
+  # one call must carry the whole card
+  for needle in 'module      : usf-cpu-unlock' 'watcher     :' 'profile     : performance' \
+                'gamelist    : 2 package' 'screenoff   : keep' 'governor    :' \
+                'cpufreq caps'; do
+    echo "$out" | grep -qF "$needle" || { bad webui-fast "missing: $needle"; return; }
+  done
+  # and nothing slow
+  echo "$out" | grep -q 'engine state' && { bad webui-fast "includes the engine dump"; return; }
+  ok webui-fast
+}
+
+t_engine_command() {
+  out=$(USF_CONFIG_DIR="$TMP/cfg" sh "$MOD/usfcpu.sh" engine 2>&1)
+  echo "$out" | grep -q 'engine state' || { bad engine "no engine header: $out"; return; }
+  # must degrade gracefully when dumpsys yields nothing
+  echo "$out" | grep -q 'unavailable' || { bad engine "no fallback message"; return; }
+  ok engine-command
+}
+
+t_action_emits_status() {
+  # a profile switch must print the whole status block, so the WebUI can
+  # render from the action's own response (no extra bridge round trip)
+  rm -rf "$TMP/cfg"; mkdir -p "$TMP/cfg"
+  out=$(USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 sh "$MOD/usfcpu.sh" profile performance 2>&1)
+  echo "$out" | grep -q 'profile applied: performance' || { bad action-status "no confirmation"; return; }
+  for needle in 'profile     : performance' 'watcher     :' 'screenoff   :' 'governor    :'; do
+    echo "$out" | grep -qF "$needle" || { bad action-status "missing $needle"; return; }
+  done
+  # the same for the screen-off picker
+  out=$(USF_CONFIG_DIR="$TMP/cfg" USF_NO_SPAWN=1 sh "$MOD/usfcpu.sh" screenoff keep 2>&1)
+  echo "$out" | grep -qF 'screenoff   : keep' || { bad action-status "screenoff does not report"; return; }
+  echo "$out" | grep -qF 'profile     :' || { bad action-status "screenoff has no status block"; return; }
+  ok action-emits-status
+}
+
 t_update_json_paths() {
   uj="$ROOT/update.json"
   [ -f "$uj" ] || { bad update-json "update.json missing"; return; }
@@ -291,6 +341,9 @@ t_decoy_names
 t_gt_in_value
 t_apostrophe_value
 t_update_json_paths
+t_webui_fast
+t_engine_command
+t_action_emits_status
 t_cli_usage
 t_cli_games
 t_cli_watch_toggle

@@ -131,10 +131,24 @@ restart_usf() {
   fi
 }
 
+# Read a file into RF without forking ($(cat f) spawns a subshell AND cat).
+RF=""
+rd() {
+  RF=""
+  [ -r "$1" ] || return 1
+  read -r RF < "$1" 2>/dev/null
+  return 0
+}
+
 print_freqs() {
   for d in /sys/devices/system/cpu/cpufreq/policy*; do
     [ -r "$d/scaling_max_freq" ] || continue
-    ui "  $(basename "$d"): max=$(cat "$d/scaling_max_freq" 2>/dev/null) hw=$(cat "$d/cpuinfo_max_freq" 2>/dev/null)"
+    rd "$d/scaling_max_freq" || continue
+    _mx=$RF
+    _hw="?"
+    rd "$d/cpuinfo_max_freq" && _hw=$RF
+    # ${d##*/} instead of basename: no fork per policy
+    ui "  ${d##*/}: max=$_mx hw=$_hw"
   done
 }
 
@@ -308,16 +322,8 @@ do_status() {
   fi
   pids=$(usf_pids | tr '\n' ' ')
   ui "usf pid(s) : ${pids:-not running}"
-  ui "engine state (excerpt):"
-  excerpt=$(engine_state | sed -n '/=== Thermal Engine State ===/,/=== End of Thermal Engine State ===/p' \
-    | grep -E 'MTK thermal CPU limit support|Thermal CPU handle|Current temp config|tempLevel=|^ *cpu=|clusterCpu[012]=')
-  if [ -n "$excerpt" ]; then
-    ui "$excerpt"
-  else
-    ui "  (engine dump unavailable - dumpsys did not respond; mount state above is still valid)"
-  fi
-  ui "cpufreq caps (max vs hardware max):"
-  print_freqs
+  do_engine
+  status_core
 }
 
 # Fast path for the WebUI: version + mount state + cpufreq ceilings only.
@@ -385,40 +391,91 @@ do_profile() {
   fg=$(current_fg 2>/dev/null) || fg=""
   printf '%s|%s\n' "$(date +%s)" "$fg" > "$HOLDFILE" 2>/dev/null
   ui "profile applied: $p"
-  if [ -n "$fg" ]; then
-    ui "manual hold : active while $fg stays foreground"
-  else
-    ui "manual hold : active (foreground app not detected)"
-  fi
-  print_freqs
+  status_core
 }
 
-do_profile_status() {
-  cur=$(cat "$CONFIG_DIR/watcher.state" 2>/dev/null)
-  man=$(cat "$CONFIG_DIR/manual_profile" 2>/dev/null)
+# Everything the WebUI card needs that comes from sysfs / state files.
+# No dumpsys, no /proc scan: this is the hot path behind a button tap.
+status_core() {
+  rd "$CONFIG_DIR/watcher.state" && cur=$RF || cur=""
+  rd "$CONFIG_DIR/manual_profile" && man=$RF || man=""
   if [ -f "$CONFIG_DIR/watcher.disabled" ]; then
     wstate=off
   else
-    wpid=$(cat "$CONFIG_DIR/watcher.pid" 2>/dev/null)
-    if [ -n "$wpid" ] && [ -d "/proc/$wpid" ]; then wstate="on (pid $wpid)"; else wstate="on (not running)"; fi
+    wstate="on (not running)"
+    if rd "$CONFIG_DIR/watcher.pid" && [ -n "$RF" ] && [ -d "/proc/$RF" ]; then
+      wstate="on (pid $RF)"
+    fi
   fi
   ui "watcher     : $wstate"
   ui "profile     : ${cur:-unknown (watcher has not run yet)}"
   [ -n "$man" ] && ui "manual pick : $man"
+
+  # gamelist count without grep: one read, shell match per line
   n=0
-  [ -r "$GAMELIST" ] && n=$(grep -cvE '^[[:space:]]*(#|$)' "$GAMELIST" 2>/dev/null)
-  if [ -r "$HOLDFILE" ]; then
-    hold=$(head -n 1 "$HOLDFILE" 2>/dev/null)
+  if [ -r "$GAMELIST" ]; then
+    while IFS= read -r _gl || [ -n "$_gl" ]; do
+      case "$_gl" in ''|'#'*) continue ;; esac
+      case "$_gl" in *[![:space:]]*) n=$((n + 1)) ;; esac
+    done < "$GAMELIST"
+  fi
+  ui "gamelist    : $n package(s) -> $GAMELIST"
+
+  if rd "$HOLDFILE"; then
+    hold=$RF
     ui "manual hold : ${hold#*|} (until the foreground app changes)"
   fi
-  ui "gamelist    : ${n:-0} package(s) -> $GAMELIST"
-  gov=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)
   ui "screenoff   : $(screenoff_mode)"
-  ui "governor    : ${gov:-unknown} (policy0)"
-  ppm=$(cat /proc/ppm/policy/hard_userlimit_max_cpu_freq 2>/dev/null | tr '\n' ';' | sed 's/;$//')
-  [ -n "$ppm" ] && ui "ppm max lim : $ppm"
+
+  gov="unknown"
+  rd /sys/devices/system/cpu/cpufreq/policy0/scaling_governor && gov=$RF
+  ui "governor    : $gov (policy0)"
+
+  # PPM limits: join the per-cluster lines in shell, no tr/sed
+  if [ -r /proc/ppm/policy/hard_userlimit_max_cpu_freq ]; then
+    ppm=""
+    while IFS= read -r _pl || [ -n "$_pl" ]; do
+      [ -n "$_pl" ] || continue
+      if [ -z "$ppm" ]; then ppm=$_pl; else ppm="$ppm;$_pl"; fi
+    done < /proc/ppm/policy/hard_userlimit_max_cpu_freq
+    [ -n "$ppm" ] && ui "ppm max lim : $ppm"
+  fi
+
   ui "cpufreq caps (max vs hardware max):"
   print_freqs
+}
+
+do_profile_status() {
+  status_core
+}
+
+# One bridge round trip for the whole card: header + mount + status_core.
+# The WebUI calls this instead of `webui-quick` + `profile-status`.
+do_fast() {
+  ver=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
+  ui "module      : usf-cpu-unlock ${ver:-unknown}"
+  if [ -n "$SRC" ]; then
+    if is_mounted "$SRC"; then
+      ui "patch mount: ACTIVE (USF CPU cap disabled)"
+    else
+      ui "patch mount: inactive (stock behavior)"
+    fi
+  fi
+  status_core
+}
+
+# The slow, dumpsys-backed detail: fetched lazily by the WebUI, never on the
+# tap path.
+do_engine() {
+  ui "engine state (excerpt):"
+  excerpt=$(engine_state | sed -n '/=== Thermal Engine State ===/,/=== End of Thermal Engine State ===/p' \
+    | grep -E 'MTK thermal CPU limit support|Thermal CPU handle|Current temp config|tempLevel=|^ *cpu=|clusterCpu[012]=')
+  if [ -n "$excerpt" ]; then
+    ui "$excerpt"
+  else
+    ui "  (engine dump unavailable - dumpsys did not respond)"
+  fi
+  ui "usf pid(s) : $(usf_pids | tr '\n' ' ')"
 }
 
 do_watch() {
@@ -485,7 +542,7 @@ do_screenoff() {
     balance)   ui "screen off: drop to balance" ;;
     powersave) ui "screen off: drop to powersave" ;;
   esac
-  ui "takes effect on the watcher's next poll (<= 2s)"
+  status_core
 }
 
 # Effective screen-off mode, same precedence the watcher uses.
@@ -547,6 +604,8 @@ case "$0" in
   restore)      do_restore ;;
   status)       do_status ;;
   webui-quick)  do_quick ;;
+  webui-fast)   do_fast ;;
+  engine)       do_engine ;;
   changelog)    do_changelog ;;
   profile)      do_profile "${2:-}" ;;
   profile-status) do_profile_status ;;
@@ -558,7 +617,7 @@ case "$0" in
     ;;
   restart-usf)  restart_usf ;;
   *)
-    ui "usage: $0 {apply|restore|status|webui-quick|toggle|changelog|restart-usf}"
+    ui "usage: $0 {apply|restore|status|webui-quick|webui-fast|engine|toggle|changelog|restart-usf}"
     ui "       $0 profile {performance|performance_lite|balance|powersave}"
     ui "       $0 profile-status | watch {on|off|status}"
     ui "       $0 screenoff {powersave|balance|keep}"

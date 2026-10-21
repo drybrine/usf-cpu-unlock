@@ -498,26 +498,40 @@ function render(update) {
     : st.games + " package" + (st.games === 1 ? "" : "s") + " \u00b7 auto-boost on launch";
 }
 
-function refresh() {
+// The engine dump runs dumpsys (1-6s). It only feeds one detail row, so it is
+// cached: fetching it on every refresh made the card feel slow for a line of
+// text that barely changes.
+var engineText = "";
+var engineAt = 0;
+
+// Read at call time so it can be tuned (and so the host harness can expire the
+// cache without reloading the page).
+function engineTtl() {
+  return (typeof window.USF_ENGINE_TTL === "number") ? window.USF_ENGINE_TTL : 60000;
+}
+
+function fetchEngine() {
+  return runSh("engine").then(function (r) {
+    engineText = r.stdout || "";
+    engineAt = Date.now();
+    render(parseStatus(engineText));
+  }).catch(function () {});
+}
+
+// refresh(force): force re-fetches the engine detail too. Nobody passes true
+// from the UI on purpose - the engine dump is a 1-6s dumpsys and caching it is
+// what makes a refresh cost one fast call instead of a full engine dump.
+// It is refetched automatically once the cache is older than ENGINE_TTL.
+function refresh(force) {
   if (busy) return Promise.resolve();
   setBusy(true, "Refreshing\u2026");
-  // FAST PATH: webui-quick is sysfs-only (no dumpsys, no /proc scan) and
-  // paints the card in milliseconds; the full engine dump follows in the
-  // background and only fills in the detail fields.
-  return runSh("webui-quick").then(function (r) {
+  // ONE round trip: webui-fast returns the whole card (sysfs + state files,
+  // no dumpsys). Splitting this into webui-quick + profile-status + status
+  // cost three bridge round trips per refresh.
+  return runSh("webui-fast").then(function (r) {
     render(parseStatus(r.stdout || ""));
     setBusy(false);
-    // Both follow-ups paint as soon as they land: profile-status is
-    // sysfs/state-file only (fast), while the engine dump has to run dumpsys
-    // and can take seconds. Merging keeps the fast one from being blocked.
-    return Promise.all([
-      runSh("profile-status").then(function (r) {
-        render(parseStatus(r.stdout || ""));
-      }).catch(function () {}),
-      runSh("status").then(function (r) {
-        render(parseStatus(r.stdout || ""));
-      }).catch(function () {})
-    ]);
+    if (force || !engineText || (Date.now() - engineAt) > engineTtl()) return fetchEngine();
   }).catch(function () {
     $("stateLbl").textContent = "Error";
     $("stateNote").textContent = "could not run usfcpu.sh";
@@ -534,16 +548,22 @@ function action(sub, label, doneMsg, optimistic) {
   if (typeof optimistic === "function") {
     try { optimistic(); } catch (e) {}
   }
-  runSh(sub).then(function () {
+  runSh(sub).then(function (r) {
     toast(doneMsg);
+    // Every action prints a full status block, so the card can be repainted
+    // from this very response - no follow-up round trip. Only fall back to a
+    // refresh when the output carries nothing usable.
+    var st = parseStatus(r.stdout || "");
+    setBusy(false);
+    if (st.prof !== undefined || st.mounted !== undefined) {
+      render(st);
+      return;
+    }
+    return refresh();
   }, function (err) {
     toast((err && err.timeout) ? (label.replace(/\u2026$/, "") + ": no response from the manager")
                                : (label + " failed"));
-  }).then(function () {
-    // Release the busy flag FIRST: refresh() bails out while busy is set, so
-    // calling it before this left the card showing the previous profile.
     setBusy(false);
-    return refresh();
   }).catch(function () {
     setBusy(false);
   });

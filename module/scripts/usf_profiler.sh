@@ -72,27 +72,38 @@ have() {
     [ -e "$1" ]
 }
 
-# DRYRUN-aware write: value, node, [must-exist]
-apply() {
+# Write one value into one node.
+#
+# This runs hundreds of times per profile switch, synchronously behind a
+# button tap, so it must not fork. `chmod` is a process spawn (3-5ms on a
+# phone) and it was the single biggest cost here - 43 of the 60 forks a
+# `performance` apply made. As root the node is already writable on virtually
+# every sysfs/proc node, so only chmod when the write would otherwise fail.
+_put() { # _put <value> <node>
     [ -n "$2" ] || return 1
     if [ "$DRYRUN" = "1" ]; then
         printf '[dry] %s <- %s\n' "$2" "$1"
         return 0
     fi
-    [ -f "$2" ] || return 1
+    [ -e "$2" ] || return 1
+    if [ -w "$2" ]; then
+        printf '%s\n' "$1" > "$2" 2>/dev/null
+        return 0
+    fi
     chmod 644 "$2" >/dev/null 2>&1
-    echo "$1" > "$2" 2>/dev/null
+    printf '%s\n' "$1" > "$2" 2>/dev/null
 }
 
-write() {
-    [ -n "$2" ] || return 1
-    if [ "$DRYRUN" = "1" ]; then
-        printf '[dry] %s <- %s\n' "$2" "$1"
-        return 0
-    fi
-    [ -f "$2" ] || return 1
-    chmod 644 "$2" >/dev/null 2>&1
-    echo "$1" > "$2" 2>/dev/null
+apply() { _put "$1" "$2"; }
+write() { _put "$1" "$2"; }
+
+# Read one line into RF without forking: $(cat file) spawns a subshell AND cat.
+RF=""
+rd() {
+    RF=""
+    [ -r "$1" ] || return 1
+    read -r RF < "$1" 2>/dev/null
+    return 0
 }
 
 change_cpu_gov() {
@@ -112,27 +123,134 @@ change_cpu_gov() {
 # Frequency fetching
 ###################################
 
-# Freq-table readers. In DRYRUN an unreadable table yields a placeholder so
-# the dry-run output stays clean (nothing is ever written in dry-run anyway).
-_whichfreq() {  # _whichfreq <sort-order> <file>
-    if [ -r "$2" ]; then
-        tr ' ' '\n' < "$2" | grep -v '^[[:space:]]*$' | sort "$1" | head -n 1
-    elif [ "$DRYRUN" = "1" ]; then
-        printf '999999\n'
-    fi
-}
-which_maxfreq() { _whichfreq -nr "$1"; }
-which_minfreq() { _whichfreq -n "$1"; }
-which_midfreq() {
-    total_opp=$(wc -w < "$1" 2>/dev/null)
-    [ -n "$total_opp" ] && [ "$total_opp" -gt 0 ] || { which_minfreq "$1"; return; }
-    mid_opp=$(((total_opp + 1) / 2))
-    mid=$(tr ' ' '\n' < "$1" | grep -v '^[[:space:]]*$' | sort -nr | head -n "$mid_opp" | tail -n 1)
-    [ -n "$mid" ] && { printf '%s\n' "$mid"; return; }
-    which_minfreq "$1"
+# Frequency tables. Each helper sets RF instead of printing: a function
+# called in $(...) forks a subshell, and `tr | sort | head` forked three more,
+# so the old form cost ~4 forks per lookup - on the button-tap path.
+_freq_scan() { # _freq_scan <file> — fills _F_VALS (space separated) and _F_COUNT
+    _F_VALS=""
+    _F_COUNT=0
+    [ -r "$1" ] || return 1
+    while IFS= read -r _fl || [ -n "$_fl" ]; do
+        for _fv in $_fl; do
+            case "$_fv" in ''|*[!0-9]*) continue ;; esac
+            _F_VALS="$_F_VALS $_fv"
+            _F_COUNT=$((_F_COUNT + 1))
+        done
+    done < "$1"
+    [ "$_F_COUNT" -gt 0 ]
 }
 
+freq_max() { # freq_max <file> -> RF
+    RF=""
+    if _freq_scan "$1"; then
+        for _fv in $_F_VALS; do
+            if [ -z "$RF" ] || [ "$_fv" -gt "$RF" ]; then RF=$_fv; fi
+        done
+        return 0
+    fi
+    [ "$DRYRUN" = "1" ] && { RF=999999; return 0; }
+    return 1
+}
+
+freq_min() { # freq_min <file> -> RF
+    RF=""
+    if _freq_scan "$1"; then
+        for _fv in $_F_VALS; do
+            if [ -z "$RF" ] || [ "$_fv" -lt "$RF" ]; then RF=$_fv; fi
+        done
+        return 0
+    fi
+    [ "$DRYRUN" = "1" ] && { RF=999999; return 0; }
+    return 1
+}
+
+freq_mid() { # freq_mid <file> -> RF (nth-highest, n = ceil(count/2))
+    RF=""
+    if ! _freq_scan "$1"; then
+        [ "$DRYRUN" = "1" ] && { RF=999999; return 0; }
+        return 1
+    fi
+    _k=$(((_F_COUNT + 1) / 2))
+    _need=$((_k - 1))          # values that must be greater than the pick
+    for _fv in $_F_VALS; do
+        _greater=0
+        for _fw in $_F_VALS; do
+            [ "$_fw" -gt "$_fv" ] && _greater=$((_greater + 1))
+        done
+        [ "$_greater" -eq "$_need" ] && { RF=$_fv; return 0; }
+    done
+    freq_min "$1"
+}
+
+# Compat wrappers for the call sites that still consume stdout.
+which_maxfreq() { freq_max "$1" && printf '%s\n' "$RF"; }
+which_minfreq() { freq_min "$1" && printf '%s\n' "$RF"; }
+which_midfreq() { freq_mid "$1" && printf '%s\n' "$RF"; }
+
 mtk_gpufreq_minfreq_index() { awk -F'[][]' '{print $2}' "$1" 2>/dev/null | tail -n 1; }
+
+# Locate a platform directory ONCE. `find` is a fork AND a tree walk, and the
+# same path was looked up several times per profile switch. Glob expansion is
+# built into the shell. Result goes to RF.
+MALI_CACHE=""
+mali_path() {
+    RF=""
+    [ -n "$MALI_CACHE" ] && { RF=$MALI_CACHE; return 0; }
+    for _d in /sys/devices/platform/*.mali /sys/devices/platform/*/*.mali \
+              /sys/devices/platform/*.gpu /sys/devices/platform/*/*.gpu; do
+        [ -e "$_d" ] || continue
+        MALI_CACHE=$_d
+        RF=$_d
+        return 0
+    done
+    return 1
+}
+
+GPU_DEVFREQ_CACHE=""
+gpu_devfreq_path() {
+    RF=""
+    [ -n "$GPU_DEVFREQ_CACHE" ] && { RF=$GPU_DEVFREQ_CACHE; return 0; }
+    for _d in /sys/class/devfreq/*.gpu /sys/class/devfreq/*gpu*; do
+        [ -d "$_d" ] || continue
+        GPU_DEVFREQ_CACHE=$_d
+        RF=$_d
+        return 0
+    done
+    return 1
+}
+
+# Second character of $1 -> SC (the PPM policy index in "[0] PWR_THRO ...").
+_second_char() {
+    _r=${1#?}
+    SC=${_r%"${_r#?}"}
+}
+
+# PPM policy rows, matched in shell instead of `grep | while read` (2 forks).
+# The whole file is snapshotted BEFORE writing: /proc/ppm/policy_status is the
+# same node being written, and streaming it while writing could end the loop
+# early (shellcheck SC2094).
+ppm_policy_off() { # ppm_policy_off <0|1>
+    [ -r /proc/ppm/policy_status ] || return 0
+    _rows=""
+    while IFS= read -r _row || [ -n "$_row" ]; do
+        _rows="$_rows$_row
+"
+    done < /proc/ppm/policy_status
+    [ -n "$_rows" ] || return 0
+
+    _saved_ifs=$IFS
+    IFS='
+'
+    for _row in $_rows; do
+        case "$_row" in
+            *PWR_THRO*|*THERMAL*)
+                _second_char "$_row"
+                apply "$SC $1" /proc/ppm/policy_status
+                ;;
+        esac
+    done
+    IFS=$_saved_ifs
+}
 
 ###################################
 # CPU frequency profiles
@@ -142,7 +260,8 @@ cpufreq_ppm_max_perf() {
     cluster=-1
     for path in /sys/devices/system/cpu/cpufreq/policy*; do
         cluster=$((cluster + 1))
-        cpu_maxfreq=$(cat "$path/cpuinfo_max_freq" 2>/dev/null) || continue
+        rd "$path/cpuinfo_max_freq" || continue
+        cpu_maxfreq=$RF
         write "$cluster $cpu_maxfreq" /proc/ppm/policy/hard_userlimit_max_cpu_freq
 
         if [ "$LITE_MODE" -eq 1 ]; then
@@ -157,11 +276,12 @@ cpufreq_ppm_max_perf() {
 cpufreq_max_perf() {
     for path in /sys/devices/system/cpu/cpu*/cpufreq; do
         [ -f "$path/cpuinfo_max_freq" ] || continue
-        cpu_maxfreq=$(cat "$path/cpuinfo_max_freq")
+        rd "$path/cpuinfo_max_freq" || continue
+        cpu_maxfreq=$RF
         apply "$cpu_maxfreq" "$path/scaling_max_freq"
         if [ "$LITE_MODE" -eq 1 ]; then
             cpu_midfreq=$(which_midfreq "$path/scaling_available_frequencies" 2>/dev/null)
-            [ -n "$cpu_midfreq" ] || cpu_midfreq=$(cat "$path/cpuinfo_min_freq" 2>/dev/null)
+            [ -n "$cpu_midfreq" ] || { rd "$path/cpuinfo_min_freq" && cpu_midfreq=$RF; }
             [ -n "$cpu_midfreq" ] && apply "$cpu_midfreq" "$path/scaling_min_freq"
         else
             apply "$cpu_maxfreq" "$path/scaling_min_freq"
@@ -172,8 +292,10 @@ cpufreq_max_perf() {
 cpufreq_ppm_unlock() {
     cluster=0
     for path in /sys/devices/system/cpu/cpufreq/policy*; do
-        cpu_maxfreq=$(cat "$path/cpuinfo_max_freq" 2>/dev/null) || continue
-        cpu_minfreq=$(cat "$path/cpuinfo_min_freq" 2>/dev/null)
+        rd "$path/cpuinfo_max_freq" || continue
+        cpu_maxfreq=$RF
+        rd "$path/cpuinfo_min_freq" || continue
+        cpu_minfreq=$RF
         write "$cluster $cpu_maxfreq" /proc/ppm/policy/hard_userlimit_max_cpu_freq
         write "$cluster $cpu_minfreq" /proc/ppm/policy/hard_userlimit_min_cpu_freq
         cluster=$((cluster + 1))
@@ -183,8 +305,11 @@ cpufreq_ppm_unlock() {
 cpufreq_unlock() {
     for path in /sys/devices/system/cpu/cpu*/cpufreq; do
         [ -f "$path/cpuinfo_max_freq" ] || continue
-        write "$(cat "$path/cpuinfo_max_freq")" "$path/scaling_max_freq"
-        write "$(cat "$path/cpuinfo_min_freq")" "$path/scaling_min_freq"
+        rd "$path/cpuinfo_max_freq" || continue
+        _mx=$RF
+        rd "$path/cpuinfo_min_freq" || continue
+        write "$_mx" "$path/scaling_max_freq"
+        write "$RF" "$path/scaling_min_freq"
     done
 }
 
@@ -225,9 +350,7 @@ devfreq_min_perf() {
 mediatek_performance() {
     # PPM thermal/power policies off (the clamp lives here on old kernels)
     if have /proc/ppm; then
-        grep -E 'PWR_THRO|THERMAL' /proc/ppm/policy_status 2>/dev/null | while read -r row; do
-            apply "$(printf %s "$row" | cut -c2) 0" /proc/ppm/policy_status
-        done
+        ppm_policy_off 0
     fi
 
     # FPSGO forced off
@@ -260,8 +383,7 @@ mediatek_performance() {
     }
 
     # Mali power policy
-    mali_sysfs=$(find /sys/devices/platform/ -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$mali_sysfs" ] && apply always_on "$mali_sysfs/power_policy"
+    mali_path && apply always_on "$RF/power_policy"
 
     # Battery over-current throttle: stop
     apply 'stop 1' /proc/mtk_batoc_throttling/battery_oc_protect_stop
@@ -328,8 +450,7 @@ exynos_performance() {
         apply "$(which_minfreq "$freq_node")" "$gpu_path/gpu_min_clock"
     fi
 
-    mali_sysfs=$(find /sys/devices/platform/ -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$mali_sysfs" ] && apply always_on "$mali_sysfs/power_policy"
+    mali_path && apply always_on "$RF/power_policy"
 
     if [ -z "${USF_NO_DDR_TWEAK:-}" ]; then
         for path in /sys/class/devfreq/*devfreq_mif*; do
@@ -340,22 +461,21 @@ exynos_performance() {
 }
 
 unisoc_performance() {
-    gpu_path=$(find /sys/class/devfreq/ -type d -iname '*.gpu' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] || return 0
-    if [ "$LITE_MODE" -eq 0 ]; then devfreq_max_perf "$gpu_path"; else devfreq_unlock "$gpu_path"; fi
+    gpu_devfreq_path || return 0
+    if [ "$LITE_MODE" -eq 0 ]; then devfreq_max_perf "$RF"; else devfreq_unlock "$RF"; fi
 }
 
 tensor_performance() {
-    gpu_path=$(find /sys/devices/platform/ -type d -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] || return 0
-    max_freq=$(which_maxfreq "$gpu_path/available_frequencies")
-    apply "$max_freq" "$gpu_path/scaling_max_freq"
+    mali_path || return 0
+    _gp=$RF
+    max_freq=$(which_maxfreq "$_gp/available_frequencies")
+    apply "$max_freq" "$_gp/scaling_max_freq"
     if [ "$LITE_MODE" -eq 0 ]; then
         apply "$max_freq" "$gpu_path/scaling_min_freq"
     else
-        apply "$(which_minfreq "$gpu_path/available_frequencies")" "$gpu_path/scaling_min_freq"
+        apply "$(which_minfreq "$_gp/available_frequencies")" "$_gp/scaling_min_freq"
     fi
-    apply always_on "$gpu_path/power_policy"
+    apply always_on "$_gp/power_policy"
 }
 
 ###################################
@@ -364,9 +484,7 @@ tensor_performance() {
 
 mediatek_normal() {
     if have /proc/ppm; then
-        grep -E 'PWR_THRO|THERMAL' /proc/ppm/policy_status 2>/dev/null | while read -r row; do
-            apply "$(printf %s "$row" | cut -c2) 1" /proc/ppm/policy_status
-        done
+        ppm_policy_off 1
     fi
 
     apply 2 /sys/kernel/fpsgo/common/force_onoff
@@ -391,11 +509,10 @@ mediatek_normal() {
         done
     }
 
-    mali_sysfs=$(find /sys/devices/platform/ -iname '*.mali' -print -quit 2>/dev/null)
-    if grep -q adaptive "$mali_sysfs/power_policy" 2>/dev/null; then
-        apply adaptive "$mali_sysfs/power_policy"
-    else
-        apply coarse_demand "$mali_sysfs/power_policy"
+    if mali_path; then
+        _pol=coarse_demand
+        rd "$RF/power_policy" && case "$RF" in *adaptive*) _pol=adaptive ;; esac
+        apply "$_pol" "$MALI_CACHE/power_policy"
     fi
 
     apply 'stop 0' /proc/mtk_batoc_throttling/battery_oc_protect_stop
@@ -435,11 +552,10 @@ exynos_normal() {
     write "$(which_maxfreq "$freq_node")" "$gpu_path/gpu_max_clock"
     write "$(which_minfreq "$freq_node")" "$gpu_path/gpu_min_clock"
 
-    mali_sysfs=$(find /sys/devices/platform/ -iname '*.mali' -print -quit 2>/dev/null)
-    if grep -q adaptive "$mali_sysfs/power_policy" 2>/dev/null; then
-        apply adaptive "$mali_sysfs/power_policy"
-    else
-        apply coarse_demand "$mali_sysfs/power_policy"
+    if mali_path; then
+        _pol=coarse_demand
+        rd "$RF/power_policy" && case "$RF" in *adaptive*) _pol=adaptive ;; esac
+        apply "$_pol" "$MALI_CACHE/power_policy"
     fi
 
     if [ -z "${USF_NO_DDR_TWEAK:-}" ]; then
@@ -450,20 +566,17 @@ exynos_normal() {
 }
 
 unisoc_normal() {
-    gpu_path=$(find /sys/class/devfreq/ -type d -iname '*.gpu' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] && devfreq_unlock "$gpu_path"
+    gpu_devfreq_path && devfreq_unlock "$RF"
 }
 
 tensor_normal() {
-    gpu_path=$(find /sys/devices/platform/ -type d -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] || return 0
-    write "$(which_maxfreq "$gpu_path/available_frequencies")" "$gpu_path/scaling_max_freq"
-    write "$(which_minfreq "$gpu_path/available_frequencies")" "$gpu_path/scaling_min_freq"
-    if grep -q adaptive "$gpu_path/power_policy" 2>/dev/null; then
-        apply adaptive "$gpu_path/power_policy"
-    else
-        apply coarse_demand "$gpu_path/power_policy"
-    fi
+    mali_path || return 0
+    _gp=$RF
+    freq_max "$_gp/available_frequencies" && write "$RF" "$_gp/scaling_max_freq"
+    freq_min "$_gp/available_frequencies" && write "$RF" "$_gp/scaling_min_freq"
+    _pol=coarse_demand
+    rd "$_gp/power_policy" && case "$RF" in *adaptive*) _pol=adaptive ;; esac
+    apply "$_pol" "$_gp/power_policy"
 }
 
 ###################################
@@ -479,8 +592,7 @@ mediatek_powersave() {
         gpu_freq=$(sed -n 's/.*freq = \([0-9]\{1,\}\).*/\1/p' /proc/gpufreq/gpufreq_opp_dump 2>/dev/null | tail -n 1)
         [ -n "$gpu_freq" ] && apply "$gpu_freq" /proc/gpufreq/gpufreq_opp_freq
     fi
-    mali_sysfs=$(find /sys/devices/platform/ -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$mali_sysfs" ] && apply coarse_demand "$mali_sysfs/power_policy"
+    mali_path && apply coarse_demand "$RF/power_policy"
 }
 
 snapdragon_powersave() {
@@ -500,17 +612,17 @@ exynos_powersave() {
 }
 
 unisoc_powersave() {
-    gpu_path=$(find /sys/class/devfreq/ -type d -iname '*.gpu' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] && devfreq_min_perf "$gpu_path"
+    gpu_devfreq_path && devfreq_min_perf "$RF"
 }
 
 tensor_powersave() {
-    gpu_path=$(find /sys/devices/platform/ -type d -iname '*.mali' -print -quit 2>/dev/null)
-    [ -n "$gpu_path" ] || return 0
-    freq=$(which_minfreq "$gpu_path/available_frequencies")
-    apply "$freq" "$gpu_path/scaling_min_freq"
-    apply "$freq" "$gpu_path/scaling_max_freq"
-    apply coarse_demand "$gpu_path/power_policy"
+    mali_path || return 0
+    _gp=$RF
+    freq_min "$_gp/available_frequencies" || return 0
+    _mn=$RF
+    apply "$_mn" "$_gp/scaling_min_freq"
+    apply "$_mn" "$_gp/scaling_max_freq"
+    apply coarse_demand "$_gp/power_policy"
 }
 
 ###################################
@@ -525,12 +637,14 @@ perfcommon() {
     done
 
     # Networking: best available congestion control for gaming
-    for algo in bbr3 bbr2 bbrplus bbr westwood cubic; do
-        if grep -q "$algo" /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
-            apply "$algo" /proc/sys/net/ipv4/tcp_congestion_control
-            break
-        fi
-    done
+    if rd /proc/sys/net/ipv4/tcp_available_congestion_control; then
+        _avail=" $RF "
+        for algo in bbr3 bbr2 bbrplus bbr westwood cubic; do
+            case "$_avail" in
+                *" $algo "*) apply "$algo" /proc/sys/net/ipv4/tcp_congestion_control; break ;;
+            esac
+        done
+    fi
 
     apply 1 /proc/sys/net/ipv4/tcp_low_latency
     apply 1 /proc/sys/net/ipv4/tcp_ecn
@@ -578,7 +692,7 @@ performance_profile() {
 
     # Battery saver off while gaming
     have /sys/module/battery_saver/parameters/enabled && {
-        if grep -qo '[0-9]\+' /sys/module/battery_saver/parameters/enabled 2>/dev/null; then
+        if rd /sys/module/battery_saver/parameters/enabled && case "$RF" in *[0-9]*) true ;; *) false ;; esac; then
             apply 0 /sys/module/battery_saver/parameters/enabled
         else
             apply N /sys/module/battery_saver/parameters/enabled
@@ -692,7 +806,7 @@ powersave_profile() {
     [ -d /dev/stune/ ] && apply 1 /dev/stune/top-app/schedtune.prefer_idle
 
     have /sys/module/battery_saver/parameters/enabled && {
-        if grep -qo '[0-9]\+' /sys/module/battery_saver/parameters/enabled 2>/dev/null; then
+        if rd /sys/module/battery_saver/parameters/enabled && case "$RF" in *[0-9]*) true ;; *) false ;; esac; then
             apply 1 /sys/module/battery_saver/parameters/enabled
         else
             apply Y /sys/module/battery_saver/parameters/enabled
@@ -715,16 +829,23 @@ powersave_profile() {
 # Dispatch
 ###################################
 
-case "${1:-}" in
-    perfcommon)        perfcommon ;;
-    performance)       performance_profile ;;
-    performance_lite)  performance_profile lite ;;
-    balance)           balance_profile ;;
-    powersave)         powersave_profile ;;
-    *)
-        log "usage: $0 {perfcommon|performance|performance_lite|balance|powersave}"
-        exit 2
-        ;;
-esac
+main() {
+    case "${1:-}" in
+        perfcommon)        perfcommon ;;
+        performance)       performance_profile ;;
+        performance_lite)  performance_profile lite ;;
+        balance)           balance_profile ;;
+        powersave)         powersave_profile ;;
+        *)
+            log "usage: $0 {perfcommon|performance|performance_lite|balance|powersave}"
+            exit 2
+            ;;
+    esac
+    exit 0
+}
 
-exit 0
+# Only dispatch when executed, not when sourced: the host suite sources this
+# file to unit-test individual helpers (apply, freq_*).
+case "$0" in
+    *usf_profiler.sh) main "$@" ;;
+esac

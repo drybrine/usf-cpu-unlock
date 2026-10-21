@@ -112,7 +112,111 @@ t_dryrun_no_sideeffects() {
   ok dryrun-pure
 }
 
+# --- performance: fork budget ---------------------------------------------
+# Every external command the profiler spawns costs a fork; on a phone that is
+# 3-5ms each, and a profile switch runs the profiler synchronously behind a
+# button tap. Measured before the optimisation: `performance` spawned 60
+# processes (43 of them `chmod`). The budget below is the regression gate.
+mk_fork_stubs() { # mk_fork_stubs <dir> — logging wrappers for every command
+  _d=$1; rm -rf "$_d"; mkdir -p "$_d"
+  for _c in chmod cat tr sort head tail find awk sed grep wc basename dirname date sleep; do
+    _real=$(command -v "$_c" 2>/dev/null) || continue
+    {
+      printf '#!/bin/sh\n'
+      printf 'printf "%%s\\n" "%s" >> "$FORKLOG"\n' "$_c"
+      printf 'exec "%s" "$@"\n' "$_real"
+    } > "$_d/$_c"
+    chmod +x "$_d/$_c"
+  done
+}
+
+count_forks() { # count_forks <profile> — prints "<total> <non-chmod>"
+  export FORKLOG="$TMP/forks.log"; : > "$FORKLOG"
+  PATH="$TMP/stub:$PATH" SOC=1 sh "$PROF" "$1" >/dev/null 2>&1 || true
+  total=$(wc -l < "$FORKLOG" | tr -d ' ')
+  chmods=$(grep -cx chmod "$FORKLOG" || true)
+  printf '%s %s\n' "$total" "${chmods:-0}"
+}
+
+t_fork_budget() {
+  # Writing to /proc or /sys as root would actually change the host, so this
+  # gate only runs unprivileged (where every write fails harmlessly).
+  if [ "$(id -u)" = "0" ]; then
+    printf 'skip fork-budget (running as root)\n'; return 0
+  fi
+  mk_fork_stubs "$TMP/stub"
+  # chmod forks are counted separately: on the host no /proc node is writable,
+  # so every write takes the chmod path; on the device (root) apply() skips
+  # chmod entirely, which t_apply_no_gratuitous_chmod proves. What this gate
+  # protects is the avoidable forks: cat/tr/sort/head/find/grep per write.
+  for prof in performance balance; do
+    set -- $(count_forks "$prof")
+    total=$1; chmods=$2
+    other=$((total - chmods))
+    [ "$other" -le 10 ] || { bad "fork-$prof" "$other non-chmod forks (budget 10; total $total)"; return; }
+    ok "fork-$prof ($other non-chmod, $total total)"
+  done
+}
+
+t_sourceable() {
+  # The profiler must be usable as a library so functions can be unit-tested:
+  # the dispatch may only run when the file is executed, not when sourced.
+  out=$(sh -c '. "$1"; type apply >/dev/null 2>&1 && echo sourced-ok' _ "$PROF" 2>&1)
+  echo "$out" | grep -q 'sourced-ok' || { bad sourceable "sourcing runs the dispatch: $out"; return; }
+  echo "$out" | grep -q 'usage:' && { bad sourceable "sourcing printed usage"; return; }
+  ok sourceable
+}
+
+t_apply_no_gratuitous_chmod() {
+  # chmod is a fork. A node that is already writable must not be chmod-ed.
+  mk_fork_stubs "$TMP/stub2"
+  node="$TMP/writable_node"
+  printf '0\n' > "$node"
+  chmod 644 "$node"
+  export FORKLOG="$TMP/chmod.log"; : > "$FORKLOG"
+  PATH="$TMP/stub2:$PATH" sh -c '. "$1"; apply 5 "$2"' _ "$PROF" "$node" >/dev/null 2>&1
+  grep -q chmod "$FORKLOG" && { bad apply-chmod "chmod forked on a writable node"; return; }
+  [ "$(cat "$node")" = "5" ] || { bad apply-chmod "value not written"; return; }
+
+  # a read-only node still needs the chmod attempt
+  node2="$TMP/ro_node"; printf '0\n' > "$node2"; chmod 444 "$node2"
+  : > "$FORKLOG"
+  PATH="$TMP/stub2:$PATH" sh -c '. "$1"; apply 7 "$2"' _ "$PROF" "$node2" >/dev/null 2>&1
+  grep -q chmod "$FORKLOG" || { bad apply-chmod "no chmod attempted on a read-only node"; return; }
+  ok apply-chmod
+}
+
+t_ppm_index_extraction() {
+  # "[1] THERMAL 1" -> index "1". The PPM node is keyed by that index, so a
+  # wrong slice silently disables the wrong policy.
+  for pair in "0|[0] PWR_THRO 1" "1|[1] THERMAL 1" "5|[5] PPM_USER_LIMIT 1"; do
+    want=${pair%%|*}; row=${pair#*|}
+    got=$(sh -c '. "$1"; _second_char "$2"; printf "%s" "$SC"' _ "$PROF" "$row" 2>&1)
+    [ "$got" = "$want" ] || { bad ppm-index "row [$row] -> '$got' (want $want)"; return; }
+  done
+  ok ppm-index
+}
+
+t_no_bogus_root_paths() {
+  # With no GPU node present the old code built "$mali_sysfs/power_policy"
+  # from an empty variable and wrote to "/power_policy". Every write target
+  # must be a plausible node path, never a bare root-level file.
+  for prof in performance balance powersave; do
+    out=$(run_profile 1 "$prof")
+    if echo "$out" | grep -qE '^\[dry\] /[A-Za-z0-9_]+ <- '; then
+      bad "bogus-$prof" "writes to a root-level path: $(echo "$out" | grep -E '^\[dry\] /[A-Za-z0-9_]+ <- ' | head -n 1)"
+      return
+    fi
+  done
+  ok no-bogus-root-paths
+}
+
 t_dispatch
+t_fork_budget
+t_sourceable
+t_apply_no_gratuitous_chmod
+t_ppm_index_extraction
+t_no_bogus_root_paths
 t_performance_mtk
 t_performance_lite_mtk
 t_balance_mtk
