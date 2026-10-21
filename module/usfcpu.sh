@@ -299,6 +299,18 @@ do_status() {
   print_freqs
 }
 
+do_changelog() {
+  v=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
+  ui "usf-cpu-unlock ${v:-unknown}"
+  ui ""
+  if [ -f "$MODDIR/CHANGELOG.md" ]; then
+    cat "$MODDIR/CHANGELOG.md"
+  else
+    ui "CHANGELOG.md not found in the module directory."
+    ui "Latest: https://github.com/drybrine/usf-cpu-unlock/releases"
+  fi
+}
+
 # Dispatch only when executed directly. Callers that source this file as a
 # library (action.sh / service.sh / uninstall.sh) invoke do_* functions
 # themselves; "$0" there is the caller's path, not this script's.
@@ -308,12 +320,13 @@ case "$0" in
   apply)        do_apply ;;
   restore)      do_restore ;;
   status)       do_status ;;
+  changelog)    do_changelog ;;
   toggle)
     if [ -n "$SRC" ] && is_mounted "$SRC"; then do_restore; else do_apply; fi
     ;;
   restart-usf)  restart_usf ;;
   *)
-    ui "usage: $0 {apply|restore|status|toggle|restart-usf}"
+    ui "usage: $0 {apply|restore|status|toggle|changelog|restart-usf}"
     ui "action.sh/service.sh/uninstall.sh source this file as a library."
     exit 2
     ;;

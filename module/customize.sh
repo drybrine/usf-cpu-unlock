@@ -31,6 +31,20 @@ fi
 
 ui_print "Target config found."
 ui_print ""
+
+# Release any bind mount left active by a previous version (in-place
+# upgrade): it is bound to the OLD module's patched file, which is about to
+# be replaced. Without this, the mount would keep serving a deleted inode.
+if [ -f /data/adb/modules/usf-cpu-unlock/usfcpu.sh ]; then
+  ui_print "Releasing any mount from the previous version..."
+  (
+    . /data/adb/modules/usf-cpu-unlock/usfcpu.sh
+    if [ -n "$SRC" ] && is_mounted "$SRC"; then
+      do_restore >/dev/null 2>&1
+    fi
+  )
+fi
+
 ui_print "Mounting the patched config now (install-time apply)..."
 MOUNT_ONLY=1
 . "$MODPATH/usfcpu.sh"

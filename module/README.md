@@ -62,6 +62,23 @@ su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh restore'
 
 Tombol **Action** di manager = toggle apply/restore.
 
+Riwayat versi tersimpan di dalam module:
+
+```sh
+su -c 'sh /data/adb/modules/usf-cpu-unlock/usfcpu.sh changelog'
+```
+
+## Update
+
+Module ini punya `updateJson` — manager KernelSU/Magisk bisa mendeteksi dan
+memasang rilis baru sendiri (perbandingan integer `versionCode` terhadap
+`update.json` di root repo). Update = install-over biasa (id module sama,
+tidak perlu uninstall). Installer otomatis melepas bind mount versi lama
+yang masih aktif sebelum memasang miliknya.
+
+Update saat patch lagi aktif itu aman; kalau mau ekstra aman jalankan
+`restore` dulu — hasil akhirnya sama.
+
 ## Auto-apply (tidak perlu run manual)
 
 - **`service.sh`** — jalan setiap modul dimuat **setelah** boot. Ini tahap
