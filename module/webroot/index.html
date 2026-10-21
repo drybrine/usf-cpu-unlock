@@ -106,10 +106,11 @@
     <button class="warn" id="btnRestore">&#9632; Restore</button>
     <button id="btnRestart">Restart USF</button>
     <button id="btnRefresh">Refresh</button>
-    <button class="wide" id="btnCopy">Copy status output</button>
+    <button id="btnLog">Show log &#9662;</button>
+    <button id="btnCopy">Copy output</button>
   </div>
 
-  <div class="log" id="log"></div>
+  <div class="log" id="log" style="display:none"></div>
   <p class="foot">
     apply = mount patched config + reload USF &middot; restore = stock behavior<br>
     Junction / skin-TJ / charging / GPU policy are never touched
@@ -265,14 +266,19 @@ function render(st) {
 function refresh() {
   if (busy) return Promise.resolve();
   setBusy(true, "Refreshing\u2026");
-  return runSh("status").then(function (r) {
+  // FAST PATH: webui-quick is sysfs-only (no dumpsys, no /proc scan) and
+  // paints the card in milliseconds; the full engine dump follows in the
+  // background and only fills in the detail fields.
+  return runSh("webui-quick").then(function (r) {
     render(parseStatus(r.stdout || ""));
+    setBusy(false);
+    return runSh("status").then(function (r2) {
+      if (!busy) render(parseStatus(r2.stdout || ""));
+    }).catch(function () {});
   }).catch(function () {
     $("stateLbl").textContent = "Error";
     $("stateNote").textContent = "could not run usfcpu.sh";
-  }).then(function () {
     setBusy(false);
-    if (parseStatus.lastErr) delete parseStatus.lastErr;
   });
 }
 
@@ -306,6 +312,20 @@ $("btnRestore").onclick = function () {
 };
 $("btnRestart").onclick = function () {
   action("restart-usf", "Restarting USF\u2026", "USF restarted");
+};
+// Log starts hidden: nothing is painted for it on open and the page paints
+// faster/cleaner; commands keep appending while hidden.
+$("log").style.display = "none";
+$("btnLog").onclick = function () {
+  var el = $("log");
+  if (el.style.display === "none") {
+    el.style.display = "block";
+    $("btnLog").textContent = "Hide log \u25B4";
+    el.scrollTop = el.scrollHeight;
+  } else {
+    el.style.display = "none";
+    $("btnLog").textContent = "Show log \u25BE";
+  }
 };
 $("btnCopy").onclick = function () {
   var text = $("log").textContent || "";

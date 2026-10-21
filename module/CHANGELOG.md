@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3.0 (versionCode 9)
+
+- **Instant WebUI paint**: the page now loads in two stages. A new
+  `webui-quick` command (sysfs-only: version, mount state, cpufreq
+  ceilings — no dumpsys, no /proc scan) renders the status card in
+  milliseconds; the full engine dump (`dumpsys`, the actual slow part)
+  follows in the background and only fills in the detail fields.
+  Buttons are usable as soon as the quick card lands.
+- **Log collapsed by default**: the command log no longer renders on
+  open — it sits behind a Show log / Hide log toggle and keeps
+  collecting while hidden.
+- WebUI harness extended to 23 assertions with staged timing (quick at
+  5ms vs full at 40ms) plus log-toggle coverage.
+
 ## v1.2.0 (versionCode 8)
 
 - **WebUI**: the module now ships `webroot/index.html` — open it from the

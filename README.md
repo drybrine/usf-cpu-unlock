@@ -49,8 +49,10 @@ The **Action** button in the manager toggles apply/restore. Auto-apply on module
 The module ships a WebUI — open it from the module's page in the manager
 (KernelSU / APatch / MMRL). One-tap **Apply / Restore / Restart USF**, a live
 status card (patch state, per-cluster ceilings vs hardware max, engine level,
-USF pid) and a copyable command log. Single self-contained
-`webroot/index.html` — no bundler, no network access.
+USF pid) and a copyable command log behind a toggle. The card paints
+instantly from a sysfs-only quick status; engine details (dumpsys) fill in
+afterwards without blocking. Single self-contained `webroot/index.html` — no
+bundler, no network access.
 
 A working apply looks like this:
 

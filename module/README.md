@@ -67,7 +67,9 @@ Tombol **Action** di manager = toggle apply/restore.
 Module ini punya WebUI — buka dari halaman module di manager (KernelSU /
 APatch / MMRL). Tombol **Apply / Restore / Restart USF** sekali tap, kartu
 status live (status patch, ceiling tiap cluster vs max hardware, level
-engine, pid USF), dan log command yang bisa di-copy. Satu file
+engine, pid USF), dan log command yang bisa di-copy (tersembunyi di balik
+tombol toggle). Kartu tergambar instan dari quick status khusus-sysfs;
+detail engine (dumpsys) menyusul di belakang tanpa memblokir. Satu file
 `webroot/index.html` mandiri — tanpa bundler, tanpa akses jaringan.
 
 Riwayat versi tersimpan di dalam module:

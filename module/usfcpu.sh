@@ -299,6 +299,22 @@ do_status() {
   print_freqs
 }
 
+# Fast path for the WebUI: version + mount state + cpufreq ceilings only.
+# No dumpsys, no /proc scan — returns in milliseconds so the page can paint
+# immediately; the full engine detail is filled in by `status` afterwards.
+do_quick() {
+  ver=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
+  ui "module      : usf-cpu-unlock ${ver:-unknown}"
+  if [ -n "$SRC" ]; then
+    if is_mounted "$SRC"; then
+      ui "patch mount: ACTIVE (USF CPU cap disabled)"
+    else
+      ui "patch mount: inactive (stock behavior)"
+    fi
+  fi
+  print_freqs
+}
+
 do_changelog() {
   v=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
   ui "usf-cpu-unlock ${v:-unknown}"
@@ -320,13 +336,14 @@ case "$0" in
   apply)        do_apply ;;
   restore)      do_restore ;;
   status)       do_status ;;
+  webui-quick)  do_quick ;;
   changelog)    do_changelog ;;
   toggle)
     if [ -n "$SRC" ] && is_mounted "$SRC"; then do_restore; else do_apply; fi
     ;;
   restart-usf)  restart_usf ;;
   *)
-    ui "usage: $0 {apply|restore|status|toggle|changelog|restart-usf}"
+    ui "usage: $0 {apply|restore|status|webui-quick|toggle|changelog|restart-usf}"
     ui "action.sh/service.sh/uninstall.sh source this file as a library."
     exit 2
     ;;

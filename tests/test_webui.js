@@ -1,6 +1,9 @@
 // Host-side test for module/webroot/index.html — runs the page's actual
 // script under Node with stubbed window/ksu/document, feeding it the real
-// `usfcpu.sh status` output format, and asserting the rendered state.
+// `usfcpu.sh` output format, and asserting the rendered state.
+//
+// The stub answers `webui-quick` in 5ms and the full `status` in 40ms so the
+// staged load (fast card paint -> background detail fill) is observable.
 //
 // Run: node tests/test_webui.js   (exit 0 = pass)
 
@@ -32,8 +35,25 @@ const document = {
   createElement() { return makeEl(); }
 };
 
-const SAMPLE = [
-  "module      : usf-cpu-unlock v1.0.5",
+// --- samples: quick (sysfs-only) and full status -----------------------------
+const QUICK_ACTIVE = [
+  "module      : usf-cpu-unlock v1.3.0",
+  "patch mount: ACTIVE (USF CPU cap disabled)",
+  "cpufreq caps (max vs hardware max):",
+  "  policy0: max=2000000 hw=2000000",
+  "  policy4: max=2600000 hw=2600000"
+].join("\n");
+
+const QUICK_STOCK = [
+  "module      : usf-cpu-unlock v1.3.0",
+  "patch mount: inactive (stock behavior)",
+  "cpufreq caps (max vs hardware max):",
+  "  policy0: max=1800000 hw=2000000",
+  "  policy4: max=2200000 hw=2600000"
+].join("\n");
+
+const FULL_ACTIVE = [
+  "module      : usf-cpu-unlock v1.3.0",
   "module dir  : /data/adb/modules/usf-cpu-unlock",
   "active xml  : /tr_product/etc/vconfig/tranusf/config/thermal/tran_thermal.xml",
   "patch mount: ACTIVE (USF CPU cap disabled)",
@@ -52,8 +72,8 @@ const SAMPLE = [
   "  policy4: max=2600000 hw=2600000"
 ].join("\n");
 
-const SAMPLE_STOCK = [
-  "module      : usf-cpu-unlock v1.0.5",
+const FULL_STOCK = [
+  "module      : usf-cpu-unlock v1.3.0",
   "active xml  : /tr_product/etc/vconfig/tranusf/config/thermal/tran_thermal.xml",
   "patch mount: inactive (stock behavior)",
   "usf pid(s) : 14771",
@@ -66,19 +86,23 @@ const SAMPLE_STOCK = [
   "  policy4: max=2200000 hw=2600000"
 ].join("\n");
 
-let currentSample = SAMPLE;
+let fullSample = FULL_ACTIVE;
+let quickSample = QUICK_ACTIVE;
 const execCalls = [];
 const toasts = [];
 
 // ksu.exec per the npm "kernelsu" 3.0.2 contract: callback style.
+// quick commands answer in 5ms, full status in 40ms.
 const ksu = {
   exec(cmd, optionsJson, callbackName) {
     execCalls.push(cmd);
     if (typeof optionsJson !== "string") throw new Error("options must be a JSON string");
+    const quick = cmd.indexOf("webui-quick") !== -1;
+    const out = quick ? quickSample : fullSample;
     setTimeout(() => {
       const cb = globalThis[callbackName];
-      if (typeof cb === "function") cb(0, currentSample, "");
-    }, 5);
+      if (typeof cb === "function") cb(0, out, "");
+    }, quick ? 5 : 40);
   },
   toast(msg) { toasts.push(msg); }
 };
@@ -93,38 +117,54 @@ function check(name, cond) {
   if (cond) { console.log("ok   " + name); }
   else { failures++; console.log("FAIL " + name); }
 }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
   eval(script); // defines functions and fires refresh() at the end
 
-  await new Promise(r => setTimeout(r, 50));
+  // --- staged load: quick paints the card before full status returns --------
+  await sleep(15); // quick done (5ms); full status still pending (40ms)
 
-  check("refresh() issued a status command", /usfcpu\.sh status/.test(execCalls[0] || ""));
-  check("version parsed", els.ver.textContent === "v1.0.5");
-  check("state label ACTIVE", els.stateLbl.textContent === "Patch ACTIVE");
-  check("dot is green", /(^|\s)on(\s|$)/.test(els.dot.className));
-  check("little cluster unlocked", els.p0.textContent.indexOf("2.00") !== -1 && els.p0.textContent.indexOf("\u2713") !== -1);
-  check("big cluster unlocked", els.p4.textContent.indexOf("2.60") !== -1 && els.p4.textContent.indexOf("\u2713") !== -1);
-  check("engine level shown", els.engine.textContent.indexOf("level 43") !== -1);
-  check("engine no-cap noted", els.engine.textContent.indexOf("no CPU cap") !== -1);
-  check("pid shown", els.pid.textContent === "18354");
-  check("log contains status text", els.log.textContent.indexOf("patch mount: ACTIVE") !== -1);
+  check("first command is webui-quick", /webui-quick/.test(execCalls[0] || ""));
+  check("quick: version parsed", els.ver.textContent === "v1.3.0");
+  check("quick: state label ACTIVE", els.stateLbl.textContent === "Patch ACTIVE");
+  check("quick: dot is green", /(^|\s)on(\s|$)/.test(els.dot.className));
+  check("quick: little unlocked", els.p0.textContent.indexOf("2.00") !== -1 && els.p0.textContent.indexOf("\u2713") !== -1);
+  check("quick: big unlocked", els.p4.textContent.indexOf("2.60") !== -1 && els.p4.textContent.indexOf("\u2713") !== -1);
+  check("quick: engine pending (\u2013)", els.engine.textContent === "\u2013");
+  check("quick: buttons re-enabled while full loads", els.btnApply.disabled === false);
+  check("log hidden by default", els.log.style.display === "none");
+
+  await sleep(80); // full status (40ms) has landed
+
+  check("full status issued in background", execCalls.some(c => /usfcpu\.sh status/.test(c)));
+  check("full: engine level 43", els.engine.textContent.indexOf("level 43") !== -1);
+  check("full: engine no-cap noted", els.engine.textContent.indexOf("no CPU cap") !== -1);
+  check("full: pid filled", els.pid.textContent === "18354");
+  check("log collected while hidden", els.log.textContent.indexOf("patch mount: ACTIVE") !== -1);
+
+  // --- log toggle ------------------------------------------------------------
+  els.btnLog.onclick();
+  check("toggle: log shown", els.log.style.display === "block");
+  check("toggle: label reads Hide log", els.btnLog.textContent.indexOf("Hide log") === 0);
+  els.btnLog.onclick();
+  check("toggle: log hidden again", els.log.style.display === "none");
+  check("toggle: label reads Show log", els.btnLog.textContent.indexOf("Show log") === 0);
 
   // --- stock sample ----------------------------------------------------------
-  currentSample = SAMPLE_STOCK;
+  fullSample = FULL_STOCK;
+  quickSample = QUICK_STOCK;
   els.ver.textContent = ""; els.stateLbl.textContent = ""; els.p0.textContent = "";
   els.p4.textContent = ""; els.engine.textContent = ""; els.pid.textContent = "";
-  els.log.children = [];
 
-  // invoke the page's own refresh handler
   els.btnRefresh.onclick ? els.btnRefresh.onclick() : null;
-  await new Promise(r => setTimeout(r, 50));
-
-  check("stock: state label", els.stateLbl.textContent === "Stock behavior");
-  check("stock: dot is red", /(^|\s)off(\s|$)/.test(els.dot.className));
-  check("stock: little capped", els.p0.textContent.indexOf("1.80") !== -1 && els.p0.textContent.indexOf("\u2713") === -1);
-  check("stock: big capped", els.p4.textContent.indexOf("2.20") !== -1 && els.p4.textContent.indexOf("\u2713") === -1);
-  check("stock: engine level 41 without no-cap", els.engine.textContent.indexOf("level 41") !== -1 && els.engine.textContent.indexOf("no CPU cap") === -1);
+  await sleep(15);
+  check("stock quick: state label", els.stateLbl.textContent === "Stock behavior");
+  check("stock quick: dot is red", /(^|\s)off(\s|$)/.test(els.dot.className));
+  await sleep(80);
+  check("stock full: little capped", els.p0.textContent.indexOf("1.80") !== -1 && els.p0.textContent.indexOf("\u2713") === -1);
+  check("stock full: big capped", els.p4.textContent.indexOf("2.20") !== -1 && els.p4.textContent.indexOf("\u2713") === -1);
+  check("stock full: engine level 41 without no-cap", els.engine.textContent.indexOf("level 41") !== -1 && els.engine.textContent.indexOf("no CPU cap") === -1);
 
   console.log(failures === 0 ? "\nwebui tests: all passed" : "\nwebui tests: " + failures + " FAILED");
   process.exit(failures === 0 ? 0 : 1);
