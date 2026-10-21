@@ -114,9 +114,11 @@ live status card (patch state, per-cluster ceilings vs hardware max, engine
 level, USF pid), a **performance card** (segmented profile picker, watcher
 switch, game-list count and add field) and a copyable command log behind a
 toggle. There is no Apply action — the patch applies itself on install and on
-every module load; the card paints instantly from a sysfs-only quick status
-while engine details (dumpsys) fill in afterwards without blocking. Single
-self-contained `webroot/index.html` — no bundler, no network access.
+every module load. A refresh is a single bridge call (`webui-fast`, sysfs and
+state files only) and a tap repaints from the action's own output, so both
+settle in ~120 ms; the dumpsys-backed engine detail is cached and filled in
+without blocking. Single self-contained `webroot/index.html` — no bundler, no
+network access.
 
 A working apply looks like this:
 
@@ -154,7 +156,7 @@ The device **can run hotter** under sustained load than XOS intends, and battery
 - The patcher (`patch_xml.awk`) refuses input it cannot rewrite safely (unterminated tags, `>` inside quoted values); nothing is mounted unless the patched file passes a separate verifier (`verify_xml.awk`) **and** a `<temp_config>` count check
 - Process restarts target only PIDs whose `/proc/PID/cmdline` is exactly `com.transsion.usf` (re-read immediately before each kill)
 - apply/restore are serialized with a lockfile; a second apply is a no-op
-- Host-side test suite: `sh tests/run_tests.sh` (16 tests: pretty/minified/CRLF/single-quoted XML, decoy attribute names, idempotency, negative gates, CLI surface), `sh tests/test_profiler.sh` (12, profiler in dry-run mode), `sh tests/test_watcher.sh` (10, watcher decision logic via env hooks), `node tests/test_webui.js` (37 assertions against the WebUI's actual script with a stubbed `ksu` bridge)
+- Host-side test suite: `sh tests/run_tests.sh` (24 tests: pretty/minified/CRLF/single-quoted XML, decoy attribute names, idempotency, negative gates, CLI surface, update manifest integrity), `sh tests/test_profiler.sh` (17, profiler in dry-run mode plus a fork budget and direct helper unit tests), `sh tests/test_watcher.sh` (22, watcher decision logic via env hooks), `node tests/test_webui.js` (58 assertions against the WebUI's actual script with a stubbed `ksu` bridge, including round-trip counts)
 
 ## Compatibility
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.2.0 (versionCode 24)
+
+Performance pass on the WebUI and on the profiler — same features, far less
+work per interaction.
+
+- **A refresh is one bridge call instead of three.** `webui-fast` returns the
+  whole card (mount state, per-cluster ceilings, profile, watcher, screen-off
+  mode, governor, gamelist count) from sysfs and state files only. Measured on
+  a page with phone-like latencies: the card settles at **122 ms instead of
+  1623 ms**, in 1 render instead of 3.
+- **The engine dump is cached.** It runs `dumpsys` (1-6 s) and only feeds one
+  detail row. It is fetched lazily, reused for 60 s, and never blocks a
+  repaint. `usfcpu.sh engine` exposes it for the CLI.
+- **A tap is one bridge call instead of four.** Every action now prints a full
+  status block, so the card is repainted from the action's own output. The old
+  flow re-ran `webui-quick` + `profile-status` + `status` after every tap.
+- **The profiler stopped forking.** `chmod` is only attempted when the node is
+  not already writable (43 of the 60 forks a `performance` apply used to make),
+  frequency tables are parsed in shell instead of `tr | sort | head`, GPU paths
+  are globbed once instead of `find`-ed per call, and the PPM/congestion loops
+  match in shell instead of `grep`. Non-chmod forks per apply: **17 → 2**.
+- **Fixed**: with no Mali node present the balance/powersave profiles wrote to
+  a bare `/power_policy` (built from an empty variable). Writes now require a
+  real GPU path.
+- The profiler is now sourceable, so its helpers are unit-tested directly
+  (`apply`, `freq_max/min/mid`); the host suite also gates the fork budget.
+- Tests: 24 shell + 17 profiler + 22 watcher + 58 webui.
+
 ## v2.1.1 (versionCode 23)
 
 Fixes the WebUI getting stuck on its busy label after a profile switch.
